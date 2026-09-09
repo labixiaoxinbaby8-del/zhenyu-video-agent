@@ -14,9 +14,10 @@
   ];
   var LOOP_AFTER_INDEX = 3; // connector between 'frames' (index 3) and 'voice' (index 4)
 
-  // ---------- state (server is the source of truth for a project's generation
-  // state; this just mirrors the currently-loaded project for rendering, plus
-  // pure client-side concerns like playback position) ----------
+  // ---------- state (the backend is the source of truth for a project's
+  // generation state when reachable; this mirrors whatever is currently
+  // loaded for rendering, plus pure client-side concerns like playback
+  // position) ----------
 
   var state = {
     mode: 'slideshow',
@@ -34,6 +35,10 @@
   };
 
   var eventSource = null;
+  // null = not yet checked; true = talking to a real node server.js;
+  // false = no backend reachable (e.g. a static Artifact preview) -> fall
+  // back to an in-browser demo simulation so the page still works.
+  var backendAvailable = null;
 
   // ---------- small helpers ----------
 
@@ -325,6 +330,7 @@
   }
 
   function handleSuggestionClick(text) {
+    if (backendAvailable === false) { localHandleMessage(text); return; }
     if (!state.activeProjectId) return;
     postMessage(state.activeProjectId, text);
   }
@@ -359,7 +365,8 @@
     return text.length > 16 ? text.slice(0, 16) + '…' : text;
   }
 
-  // ---------- applying one timeline entry (shared by history replay + live SSE) ----------
+  // ---------- applying one timeline entry (shared by history replay, live
+  // SSE from a real backend, AND the local no-backend simulation below) ----------
 
   function applyEntry(entry) {
     switch (entry.type) {
@@ -403,7 +410,7 @@
     }
   }
 
-  // ---------- SSE ----------
+  // ---------- SSE (real backend only) ----------
 
   function closeEventSource() {
     if (eventSource) { eventSource.close(); eventSource = null; }
@@ -420,38 +427,296 @@
     };
   }
 
-  // ---------- new / reset project (local-only: no server call until first message) ----------
+  // =====================================================================
+  // Local, no-backend fallback simulation. Used only when no server.js is
+  // reachable (e.g. this page was opened as a static preview link). Drives
+  // the exact same render path as the real backend via applyEntry(), so
+  // this is the only place backend-vs-local logic branches.
+  // =====================================================================
 
-  function startNewProject(mode) {
-    closeEventSource();
-    state.mode = mode || state.mode;
-    state.activeProjectId = null;
-    state.projectTitle = '未命名项目';
+  var LOCAL_SHOT_HUES = [220, 340, 160, 90, 280, 40, 200, 120];
+  var LOCAL_VOICE_BGM_RULES = [
+    { test: /儿童|童声|小朋友|科普.{0,4}可爱/, voice: '活泼童声', bgm: '阳光电子流行' },
+    { test: /培训|安全|严谨|流程|企业/, voice: '沉稳男声', bgm: '探索感管弦乐' },
+    { test: /情怀|品牌故事|温暖|车库|历程/, voice: '温柔姐姐音', bgm: '温柔钢琴独奏' },
+    { test: /种草|小红书|网感|好物|安利/, voice: '活泼童声', bgm: '阳光电子流行' }
+  ];
+  var LOCAL_DEFAULT_VOICE_BGM = { voice: '知性女声', bgm: '海风轻快民谣' };
+
+  var LOCAL_SEEDS = [
+    { id: 'ocean', title: '海洋生物科普·儿童向', mode: 'slideshow', meta: '编辑中',
+      prompt: '帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐' },
+    { id: 'autumn', title: '秋季新品发布预告片', mode: 'html', meta: '2 小时前',
+      prompt: '做一支 20 秒的秋季新品发布预告片，突出温暖色调和限时优惠，风格干净有质感',
+      reply: '预告片已经生成好啦，网页动效场景全部就绪，配的是电子流行风背景音乐，你可以直接预览～' },
+    { id: 'training', title: '内部培训引导视频', mode: 'slideshow', meta: '昨天',
+      prompt: '做一支面向新员工的安全生产培训引导视频，语气严谨但不生硬，40 秒左右',
+      reply: '培训视频已生成，分镜按"流程讲解 + 案例提醒"的顺序排好了，配音用的是沉稳男声。' },
+    { id: 'skincare', title: '小红书种草·护肤新品', mode: 'slideshow', meta: '3 天前',
+      prompt: '帮我做一条小红书种草视频脚本，主打一款保湿精华，15 秒内，节奏要快、有网感',
+      reply: '种草视频做好啦，分镜图配上了轻快电子乐，笔调也调成了小红书常见的口语化语气。' },
+    { id: 'case', title: '客户案例讲解 Demo', mode: 'html', meta: '上周',
+      prompt: '用一支 25 秒的动态视频讲解一个客户成功案例，突出前后数据对比',
+      reply: '案例讲解视频已生成，用网页动效做了数据对比的动态图表。' },
+    { id: 'brand', title: '品牌故事 30 秒版', mode: 'html', meta: '上周',
+      prompt: '做一支 30 秒的品牌故事短片，讲讲我们从车库创业到现在的历程，风格要有情怀',
+      reply: '品牌故事已生成，网页动效串起了时间线，配的是有情怀感的钢琴独奏背景音乐。' }
+  ];
+
+  function localHueForText(text) {
+    var h = 0;
+    for (var i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) >>> 0;
+    return LOCAL_SHOT_HUES[h % LOCAL_SHOT_HUES.length];
+  }
+  function localPickShotCount(prompt) {
+    var n = Math.round(prompt.length / 8);
+    return Math.max(4, Math.min(8, n || 6));
+  }
+  function localPickVoiceBgm(prompt) {
+    for (var i = 0; i < LOCAL_VOICE_BGM_RULES.length; i++) {
+      if (LOCAL_VOICE_BGM_RULES[i].test.test(prompt)) return { voice: LOCAL_VOICE_BGM_RULES[i].voice, bgm: LOCAL_VOICE_BGM_RULES[i].bgm };
+    }
+    return LOCAL_DEFAULT_VOICE_BGM;
+  }
+  function localBuildContent(prompt) {
+    var shotCount = localPickShotCount(prompt);
+    var vb = localPickVoiceBgm(prompt);
+    var totalDuration = shotCount * 5;
+    var shots = [];
+    for (var i = 0; i < shotCount; i++) shots.push({ status: 'pending', hue: LOCAL_SHOT_HUES[i % LOCAL_SHOT_HUES.length] });
+    return {
+      shotCount: shotCount, totalDuration: totalDuration, voice: vb.voice, bgm: vb.bgm, shots: shots,
+      scriptMeta: Math.max(60, prompt.length * 6) + ' 字 · 时长约 ' + totalDuration + ' 秒',
+      outlineMeta: '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落',
+      storyboardMeta: '每个大纲段落对应 1 个分镜',
+      completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
+    };
+  }
+
+  var localTimers = [];
+  function localClearTimers() { localTimers.forEach(clearTimeout); localTimers = []; }
+  function localAt(delay, fn, live) { if (live) { localTimers.push(setTimeout(fn, delay)); } else { fn(); } }
+
+  function localRunPipeline(prompt, live) {
+    var content = localBuildContent(prompt);
+    var shotCount = content.shotCount;
+    var doneSteps = [];
+
+    localAt(500, function () {
+      doneSteps.push('script');
+      applyEntry({ type: 'process_card', id: 'script', title: '脚本已生成', meta: content.scriptMeta, done: true });
+      applyEntry({ type: 'stepper', currentStep: 'outline', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '大纲生成中…', active: true });
+    }, live);
+
+    localAt(1000, function () {
+      doneSteps.push('outline');
+      applyEntry({ type: 'process_card', id: 'outline', title: '大纲已生成', meta: content.outlineMeta, done: true });
+      applyEntry({ type: 'stepper', currentStep: 'storyboard', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '拆分分镜中…', active: true });
+    }, live);
+
+    localAt(1600, function () {
+      var shots = content.shots.map(function (s) { return { status: 'pending', hue: s.hue }; });
+      doneSteps.push('storyboard');
+      applyEntry({ type: 'shots', shots: shots });
+      applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + shotCount + ' 个分镜', meta: content.storyboardMeta, done: true });
+      applyEntry({ type: 'process_card', id: 'frames', title: '分镜画面生成中', meta: '', progress: 0 });
+      applyEntry({ type: 'stepper', currentStep: 'frames', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '分镜画面生成中 (0/' + shotCount + ')', active: true });
+      applyEntry({ type: 'duration', total: content.totalDuration, done: 0, totalShots: shotCount });
+    }, live);
+
+    for (var i = 0; i < shotCount; i++) {
+      (function (idx) {
+        localAt(1600 + 500 * (idx + 1), function () {
+          var shots = state.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
+          shots[idx] = { status: 'ready', hue: content.shots[idx].hue };
+          applyEntry({ type: 'shots', shots: shots });
+          var doneCount = idx + 1;
+          applyEntry({ type: 'process_card_progress', id: 'frames', progress: Math.round((doneCount / shotCount) * 100) });
+          applyEntry({ type: 'status', text: '分镜画面生成中 (' + doneCount + '/' + shotCount + ')', active: true });
+          applyEntry({ type: 'duration', total: content.totalDuration, done: doneCount, totalShots: shotCount });
+          if (doneCount === shotCount) {
+            doneSteps.push('frames');
+            applyEntry({ type: 'process_card_done', id: 'frames', title: '分镜画面已生成', meta: shotCount + ' 个分镜全部完成' });
+            applyEntry({ type: 'stepper', currentStep: 'voice', doneSteps: doneSteps.slice() });
+            applyEntry({ type: 'status', text: '分镜声音生成中…', active: true });
+          }
+        }, live);
+      })(i);
+    }
+
+    var afterFrames = 1600 + 500 * shotCount;
+
+    localAt(afterFrames + 700, function () {
+      doneSteps.push('voice');
+      state.bgm = content.bgm;
+      state.voice = content.voice;
+      var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = content.bgm;
+      var voiceSel = document.getElementById('select-voice'); if (voiceSel) voiceSel.value = content.voice;
+      applyEntry({ type: 'process_card', id: 'voice', title: '分镜声音已生成', meta: '旁白：' + content.voice + ' · 配乐：' + content.bgm, done: true });
+      applyEntry({ type: 'stepper', currentStep: 'voice', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '按配音时长回调画面时长…', active: true });
+    }, live);
+
+    localAt(afterFrames + 1300, function () {
+      applyEntry({ type: 'process_card', id: 'sync', title: '已回调分镜画面时长', meta: '已按配音时长重新同步 ' + shotCount + ' 个分镜的展示时长', done: true });
+      applyEntry({ type: 'stepper', currentStep: 'preview', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '准备预览…', active: true });
+    }, live);
+
+    localAt(afterFrames + 1900, function () {
+      doneSteps.push('preview');
+      applyEntry({ type: 'stepper', currentStep: 'export', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'ai_message', text: content.completionText });
+      applyEntry({ type: 'suggestions', items: ['重新生成第 3 个分镜', '换一个背景音乐', '语速再快一点'] });
+      applyEntry({ type: 'status', text: '预览确认中，随时可以导出', active: false });
+    }, live);
+  }
+
+  function localHandleMessage(text) {
+    applyEntry({ type: 'user_message', text: text });
+    var m = text.match(/第\s*(\d+)\s*个分镜/);
+    if (m) {
+      var idx = parseInt(m[1], 10) - 1;
+      if (state.shots[idx]) {
+        var shots = state.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
+        shots[idx] = { status: 'loading', hue: shots[idx].hue };
+        applyEntry({ type: 'shots', shots: shots });
+        applyEntry({ type: 'status', text: '重新生成第 ' + (idx + 1) + ' 个分镜…', active: true });
+        localTimers.push(setTimeout(function () {
+          var shots2 = state.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
+          shots2[idx] = { status: 'ready', hue: (shots2[idx].hue + 40) % 360 };
+          applyEntry({ type: 'shots', shots: shots2 });
+          applyEntry({ type: 'ai_message', text: '第 ' + (idx + 1) + ' 个分镜已经重新生成啦，风格调得更活泼了一些～' });
+          applyEntry({ type: 'status', text: '预览确认中，随时可以导出', active: false });
+        }, 1100));
+      }
+    } else if (text.indexOf('背景音乐') !== -1) {
+      var candidates = ['海风轻快民谣', '阳光电子流行', '温柔钢琴独奏', '探索感管弦乐'];
+      var next = candidates[(candidates.indexOf(state.bgm) + 1) % candidates.length];
+      state.bgm = next;
+      var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = next;
+      applyEntry({ type: 'ai_message', text: '已经换成「' + next + '」啦，感觉怎么样？' });
+    } else if (text.indexOf('语速') !== -1) {
+      applyEntry({ type: 'ai_message', text: '好的，已经把旁白语速调快了一档。' });
+    }
+  }
+
+  function loadLocalProject(id) {
+    localClearTimers();
+    var seed = LOCAL_SEEDS.filter(function (s) { return s.id === id; })[0];
+    if (!seed) return;
+    state.activeProjectId = id;
+    state.mode = seed.mode;
+    state.projectTitle = seed.title;
+    state.bgm = LOCAL_DEFAULT_VOICE_BGM.bgm;
+    state.voice = LOCAL_DEFAULT_VOICE_BGM.voice;
+    updateModeSwitchUI();
+    updateProjectTitleUI();
+    highlightActiveSidebar(id);
     state.doneSteps = new Set();
     state.currentStep = null;
     state.shots = [];
-    updateModeSwitchUI();
-    updateProjectTitleUI();
-    highlightActiveSidebar(null);
     renderStepper();
     renderFilmstrip();
     resetPlayerToEmpty();
     clearChatLogDom();
-    var empty = document.createElement('p');
-    empty.id = 'chat-empty';
-    empty.className = 'chat-empty';
-    empty.textContent = '在下方输入你想拍的视频内容，比如："帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐"。发送后，AI 会严格按照"脚本→大纲→分镜→画面→声音→预览&修改→导出"的顺序，在这里逐步展示生成过程。';
-    chatLogEl().appendChild(empty);
-    var sug = document.getElementById('suggestions');
-    sug.hidden = true; sug.innerHTML = '';
-    setStatus('等待你的创意提示词', false);
-    updateDurationInfo(0, 0, 0);
-    var input = document.getElementById('chat-input');
-    input.value = '';
-    input.focus();
+    document.getElementById('suggestions').hidden = true;
+
+    var content = localBuildContent(seed.prompt);
+    applyEntry({ type: 'user_message', text: seed.prompt });
+    applyEntry({ type: 'process_card', id: 'script', title: '脚本已生成', meta: content.scriptMeta, done: true });
+    applyEntry({ type: 'process_card', id: 'outline', title: '大纲已生成', meta: content.outlineMeta, done: true });
+
+    if (id === 'ocean') {
+      var readyTarget = Math.max(1, content.shotCount - 2);
+      var remaining = content.shotCount - readyTarget;
+      var shots = content.shots.map(function (s, i) { return { status: i < readyTarget ? 'ready' : 'loading', hue: s.hue }; });
+      applyEntry({ type: 'shots', shots: shots });
+      applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + content.shotCount + ' 个分镜', meta: content.storyboardMeta, done: true });
+      applyEntry({ type: 'process_card', id: 'frames', title: '分镜画面生成中', meta: '', progress: Math.round((readyTarget / content.shotCount) * 100) });
+      applyEntry({ type: 'stepper', currentStep: 'frames', doneSteps: ['script', 'outline', 'storyboard'] });
+      applyEntry({ type: 'status', text: '分镜画面生成中 (' + readyTarget + '/' + content.shotCount + ')', active: true });
+      applyEntry({ type: 'duration', total: content.totalDuration, done: readyTarget, totalShots: content.shotCount });
+      applyEntry({ type: 'ai_message', text: '已经为前 ' + readyTarget + ' 个分镜生成好画面啦，还剩 ' + remaining + ' 个在生成中，大概 20 秒，之后会接着生成配音和配乐。你可以先预览已完成的部分，如果不满意某个分镜的画风，直接告诉我要怎么改～' });
+      applyEntry({ type: 'suggestions', items: ['重新生成第 ' + content.shotCount + ' 个分镜', '换一个背景音乐', '语速再快一点'] });
+    } else {
+      state.bgm = content.bgm;
+      state.voice = content.voice;
+      var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = content.bgm;
+      var voiceSel = document.getElementById('select-voice'); if (voiceSel) voiceSel.value = content.voice;
+      var shots2 = content.shots.map(function (s) { return { status: 'ready', hue: s.hue }; });
+      applyEntry({ type: 'shots', shots: shots2 });
+      applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + content.shotCount + ' 个分镜', meta: '', done: true });
+      applyEntry({ type: 'process_card', id: 'frames', title: '分镜画面已生成', meta: content.shotCount + ' 个分镜全部完成', done: true });
+      applyEntry({ type: 'process_card', id: 'voice', title: '分镜声音已生成', meta: '旁白：' + content.voice + ' · 配乐：' + content.bgm, done: true });
+      applyEntry({ type: 'process_card', id: 'sync', title: '已回调分镜画面时长', meta: '已按配音时长重新同步展示时长', done: true });
+      applyEntry({ type: 'stepper', currentStep: null, doneSteps: ['script', 'outline', 'storyboard', 'frames', 'voice', 'preview', 'export'] });
+      applyEntry({ type: 'ai_message', text: seed.reply || content.completionText });
+      applyEntry({ type: 'status', text: '创作完成', active: false });
+      applyEntry({ type: 'duration', total: content.totalDuration, done: content.shotCount, totalShots: content.shotCount });
+    }
   }
 
-  // ---------- loading a project (history item, or the default ocean demo) ----------
+  function buildLocalProjectList() {
+    var listEl = document.getElementById('project-list');
+    listEl.innerHTML = '';
+    LOCAL_SEEDS.forEach(function (seed) {
+      var hue = localHueForText(seed.id);
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'project-item';
+      btn.dataset.id = seed.id;
+      var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + hue + '), oklch(70% 0.08 ' + (hue + 10) + '))';
+      btn.innerHTML =
+        '<div class="project-thumb" style="background:' + thumb + '"></div>' +
+        '<div class="project-item-body">' +
+          '<span class="project-item-title">' + escapeHtml(seed.title) + '</span>' +
+          '<span class="project-item-meta">' + (seed.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(seed.meta) + '</span>' +
+        '</div>';
+      btn.addEventListener('click', function () {
+        loadLocalProject(seed.id);
+        location.hash = '#/workspace';
+      });
+      listEl.appendChild(btn);
+    });
+  }
+
+  // =====================================================================
+  // Real-backend path
+  // =====================================================================
+
+  function renderSidebarFromList(list) {
+    var listEl = document.getElementById('project-list');
+    listEl.innerHTML = '';
+    list.forEach(function (proj) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'project-item';
+      btn.dataset.id = proj.id;
+      var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + proj.thumbHue + '), oklch(70% 0.08 ' + (proj.thumbHue + 10) + '))';
+      btn.innerHTML =
+        '<div class="project-thumb" style="background:' + thumb + '"></div>' +
+        '<div class="project-item-body">' +
+          '<span class="project-item-title">' + escapeHtml(proj.title) + '</span>' +
+          '<span class="project-item-meta">' + (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta) + '</span>' +
+        '</div>';
+      btn.addEventListener('click', function () {
+        loadProjectFromServer(proj.id);
+        location.hash = '#/workspace';
+      });
+      listEl.appendChild(btn);
+      if (proj.id === state.activeProjectId) btn.classList.add('is-active');
+    });
+  }
+
+  function refreshProjectList() {
+    return api('/api/projects').then(function (res) {
+      if (res.ok) renderSidebarFromList(res.body);
+    });
+  }
 
   function loadProjectFromServer(id) {
     closeEventSource();
@@ -485,42 +750,49 @@
     });
   }
 
-  function refreshProjectList() {
-    return api('/api/projects').then(function (res) {
-      if (!res.ok) return;
-      var listEl = document.getElementById('project-list');
-      listEl.innerHTML = '';
-      res.body.forEach(function (proj) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'project-item';
-        btn.dataset.id = proj.id;
-        var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + proj.thumbHue + '), oklch(70% 0.08 ' + (proj.thumbHue + 10) + '))';
-        btn.innerHTML =
-          '<div class="project-thumb" style="background:' + thumb + '"></div>' +
-          '<div class="project-item-body">' +
-            '<span class="project-item-title">' + escapeHtml(proj.title) + '</span>' +
-            '<span class="project-item-meta">' + (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta) + '</span>' +
-          '</div>';
-        btn.addEventListener('click', function () {
-          loadProjectFromServer(proj.id);
-          location.hash = '#/workspace';
-        });
-        listEl.appendChild(btn);
-        if (proj.id === state.activeProjectId) btn.classList.add('is-active');
-      });
-    });
-  }
-
-  // ---------- sending a message: creates a project on the first send, posts a
-  // follow-up message on any send after that ----------
-
   function postMessage(id, text) {
     api('/api/projects/' + id + '/message', { method: 'POST', body: { text: text } }).then(function (res) {
       if (!res.ok) showToast('发送失败：' + (res.body.error || res.status));
     }).catch(function () {
       showToast('无法连接后端服务，请确认 node video-agent/server.js 正在运行');
     });
+  }
+
+  // ---------- unified entry points (branch on backendAvailable) ----------
+
+  function openProject(id) {
+    if (backendAvailable === false) loadLocalProject(id);
+    else loadProjectFromServer(id);
+  }
+
+  function startNewProject(mode) {
+    closeEventSource();
+    localClearTimers();
+    state.mode = mode || state.mode;
+    state.activeProjectId = null;
+    state.projectTitle = '未命名项目';
+    state.doneSteps = new Set();
+    state.currentStep = null;
+    state.shots = [];
+    updateModeSwitchUI();
+    updateProjectTitleUI();
+    highlightActiveSidebar(null);
+    renderStepper();
+    renderFilmstrip();
+    resetPlayerToEmpty();
+    clearChatLogDom();
+    var empty = document.createElement('p');
+    empty.id = 'chat-empty';
+    empty.className = 'chat-empty';
+    empty.textContent = '在下方输入你想拍的视频内容，比如："帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐"。发送后，AI 会严格按照"脚本→大纲→分镜→画面→声音→预览&修改→导出"的顺序，在这里逐步展示生成过程。';
+    chatLogEl().appendChild(empty);
+    var sug = document.getElementById('suggestions');
+    sug.hidden = true; sug.innerHTML = '';
+    setStatus('等待你的创意提示词', false);
+    updateDurationInfo(0, 0, 0);
+    var input = document.getElementById('chat-input');
+    input.value = '';
+    input.focus();
   }
 
   function handleSend() {
@@ -530,8 +802,9 @@
     input.value = '';
 
     if (state.activeProjectId) {
-      addUserMessage(text); // optimistic; server will also emit this back over SSE for other viewers
-      postMessage(state.activeProjectId, text);
+      addUserMessage(text);
+      if (backendAvailable === false) localHandleMessage(text);
+      else postMessage(state.activeProjectId, text);
       return;
     }
 
@@ -542,6 +815,12 @@
     updateProjectTitleUI();
     addUserMessage(text);
     setStatus('创建项目中…', true);
+
+    if (backendAvailable === false) {
+      state.activeProjectId = 'local-' + Date.now();
+      localRunPipeline(text, true);
+      return;
+    }
 
     api('/api/projects', { method: 'POST', body: { mode: state.mode, prompt: text } }).then(function (res) {
       if (!res.ok) { showToast('创建项目失败：' + (res.body.error || res.status)); setStatus('创建失败', false); return; }
@@ -598,6 +877,11 @@
 
     document.getElementById('btn-export').addEventListener('click', function () {
       if (!state.activeProjectId) { showToast('还没有项目可以导出'); return; }
+      if (backendAvailable === false) {
+        if (!state.doneSteps.has('preview')) { showToast('先完成分镜生成，再导出视频吧'); return; }
+        showToast('🎬 演示模式：这里会触发录屏导出真实视频文件（当前是静态预览，未连接后台）');
+        return;
+      }
       api('/api/projects/' + state.activeProjectId + '/export', { method: 'POST' }).then(function (res) {
         showToast(res.body.note || res.body.error || (res.ok ? '导出成功' : '导出失败'));
       }).catch(function () {
@@ -611,12 +895,12 @@
 
     document.getElementById('select-bgm').addEventListener('change', function (e) {
       state.bgm = e.target.value;
-      if (state.activeProjectId) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { bgm: e.target.value } }).catch(function () {});
+      if (state.activeProjectId && backendAvailable !== false) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { bgm: e.target.value } }).catch(function () {});
       showToast('背景音乐已切换为「' + state.bgm + '」');
     });
     document.getElementById('select-voice').addEventListener('change', function (e) {
       state.voice = e.target.value;
-      if (state.activeProjectId) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { voice: e.target.value } }).catch(function () {});
+      if (state.activeProjectId && backendAvailable !== false) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { voice: e.target.value } }).catch(function () {});
       showToast('旁白语音已切换为「' + state.voice + '」');
     });
 
@@ -628,14 +912,30 @@
     window.addEventListener('hashchange', render);
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
-    refreshProjectList();
+  function boot() {
     attachStaticHandlers();
     renderStepper();
     renderFilmstrip();
-    if (location.hash === '#/workspace') {
-      loadProjectFromServer('ocean');
-    }
-    render();
-  });
+
+    api('/api/projects').then(function (res) {
+      if (!res.ok) throw new Error('backend responded but not ok');
+      backendAvailable = true;
+      renderSidebarFromList(res.body);
+      if (location.hash === '#/workspace') openProject('ocean');
+    }).catch(function () {
+      backendAvailable = false;
+      buildLocalProjectList();
+      showToast('静态预览模式：未连接真实后台，创作流程为本地模拟演示');
+      if (location.hash === '#/workspace') openProject('ocean');
+    }).then(render);
+  }
+
+  // DOMContentLoaded never fires if this script runs after the document has
+  // already finished parsing (e.g. a bundled single-file page loaded in some
+  // preview contexts) — guard against that instead of assuming a fresh load.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
