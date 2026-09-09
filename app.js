@@ -1,11 +1,8 @@
 (function () {
   'use strict';
 
-  // ---------- static data ----------
+  // ---------- pipeline shape (client-only; must mirror server.js STEP_ORDER) ----------
 
-  // Strict pipeline order per spec: 生成脚本 -> 生成大纲 -> 拆分分镜 -> 生成分镜画面
-  // -> 生成分镜声音 -> 预览&修改 -> 录屏输出. 生成分镜声音 loops back into 生成分镜画面
-  // (voice-over length re-syncs each shot's on-screen duration) before moving on to preview.
   var STEP_META = [
     { key: 'script', label: '脚本', full: '生成脚本' },
     { key: 'outline', label: '大纲', full: '生成大纲' },
@@ -17,53 +14,9 @@
   ];
   var LOOP_AFTER_INDEX = 3; // connector between 'frames' (index 3) and 'voice' (index 4)
 
-  var SHOT_HUES = [220, 340, 160, 90, 280, 40, 200, 120];
-
-  var HISTORY = [
-    {
-      id: 'ocean', title: '海洋生物科普·儿童向', mode: 'slideshow', meta: '编辑中',
-      thumb: 'linear-gradient(160deg, oklch(78% 0.09 220), oklch(70% 0.1 240))',
-      prompt: '帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐',
-      duration: 30, shots: 6, voice: '知性女声', bgm: '海风轻快民谣'
-    },
-    {
-      id: 'autumn', title: '秋季新品发布预告片', mode: 'html', meta: '2 小时前',
-      thumb: 'linear-gradient(160deg, var(--accent-2-soft), var(--surface))',
-      prompt: '做一支 20 秒的秋季新品发布预告片，突出温暖色调和限时优惠，风格干净有质感',
-      reply: '预告片已经生成好啦，6 段网页动效场景全部就绪，配的是电子流行风背景音乐，你可以直接预览～',
-      duration: 20, shots: 6, voice: '沉稳男声', bgm: '阳光电子流行'
-    },
-    {
-      id: 'training', title: '内部培训引导视频', mode: 'slideshow', meta: '昨天',
-      thumb: 'linear-gradient(160deg, var(--accent-soft), var(--surface))',
-      prompt: '做一支面向新员工的安全生产培训引导视频，语气严谨但不生硬，40 秒左右',
-      reply: '培训视频已生成，7 个分镜按“流程讲解 + 案例提醒”的顺序排好了，配音用的是沉稳男声。',
-      duration: 40, shots: 7, voice: '沉稳男声', bgm: '探索感管弦乐'
-    },
-    {
-      id: 'skincare', title: '小红书种草·护肤新品', mode: 'slideshow', meta: '3 天前',
-      thumb: 'linear-gradient(160deg, oklch(88% 0.05 340), var(--surface))',
-      prompt: '帮我做一条小红书种草视频脚本，主打一款保湿精华，15 秒内，节奏要快、有网感',
-      reply: '种草视频做好啦，5 张分镜图配上了轻快电子乐，笔调也调成了小红书常见的口语化语气。',
-      duration: 15, shots: 5, voice: '活泼童声', bgm: '阳光电子流行'
-    },
-    {
-      id: 'case', title: '客户案例讲解 Demo', mode: 'html', meta: '上周',
-      thumb: 'linear-gradient(160deg, var(--accent-2-soft), var(--surface))',
-      prompt: '用一支 25 秒的动态视频讲解一个客户成功案例，突出前后数据对比',
-      reply: '案例讲解视频已生成，用网页动效做了数据对比的动态图表，一共 6 段场景。',
-      duration: 25, shots: 6, voice: '知性女声', bgm: '温柔钢琴独奏'
-    },
-    {
-      id: 'brand', title: '品牌故事 30 秒版', mode: 'html', meta: '上周',
-      thumb: 'linear-gradient(160deg, oklch(90% 0.04 90), var(--surface))',
-      prompt: '做一支 30 秒的品牌故事短片，讲讲我们从车库创业到现在的历程，风格要有情怀',
-      reply: '品牌故事已生成，6 段网页动效串起了时间线，配的是有情怀感的钢琴独奏背景音乐。',
-      duration: 30, shots: 6, voice: '温柔姐姐音', bgm: '温柔钢琴独奏'
-    }
-  ];
-
-  // ---------- state ----------
+  // ---------- state (server is the source of truth for a project's generation
+  // state; this just mirrors the currently-loaded project for rendering, plus
+  // pure client-side concerns like playback position) ----------
 
   var state = {
     mode: 'slideshow',
@@ -74,16 +27,16 @@
     shots: [],
     bgm: '海风轻快民谣',
     voice: '知性女声',
-    timers: [],
     isPlaying: false,
     playbackTimer: null,
     elapsedSeconds: 0,
     totalDuration: 30
   };
 
+  var eventSource = null;
+
   // ---------- small helpers ----------
 
-  function $(sel) { return document.querySelector(sel); }
   function $all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
 
   function escapeHtml(str) {
@@ -117,6 +70,12 @@
   function pauseSvgSmall() {
     return '<svg id="mini-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="oklch(100% 0 0)" style="cursor:pointer"><rect x="6" y="5" width="4" height="14"></rect><rect x="14" y="5" width="4" height="14"></rect></svg>';
   }
+  function loopIconSvg() {
+    return '<svg class="loop-icon" viewBox="0 0 64 26" preserveAspectRatio="none" aria-hidden="true">' +
+      '<path d="M6 22 C 6 6, 58 6, 58 20" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"></path>' +
+      '<path d="M58 20 L 50 15 M58 20 L 51 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
+      '</svg>';
+  }
 
   var toastTimer = null;
   function showToast(msg) {
@@ -127,24 +86,20 @@
     toastTimer = setTimeout(function () { el.hidden = true; }, 2600);
   }
 
-  function addTimer(delay, fn) {
-    var id = setTimeout(fn, delay);
-    state.timers.push(id);
-    return id;
-  }
-  function clearAllTimers() {
-    state.timers.forEach(clearTimeout);
-    state.timers = [];
+  function api(path, opts) {
+    opts = opts || {};
+    if (opts.body) {
+      opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+      opts.body = JSON.stringify(opts.body);
+    }
+    return fetch(path, opts).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) {
+        return { ok: res.ok, status: res.status, body: body };
+      });
+    });
   }
 
   // ---------- stepper ----------
-
-  function loopIconSvg() {
-    return '<svg class="loop-icon" viewBox="0 0 64 26" preserveAspectRatio="none" aria-hidden="true">' +
-      '<path d="M6 22 C 6 6, 58 6, 58 20" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"></path>' +
-      '<path d="M58 20 L 50 15 M58 20 L 51 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
-      '</svg>';
-  }
 
   function renderStepper() {
     var el = document.getElementById('stepper');
@@ -221,7 +176,7 @@
     resetPlaybackProgress();
   }
 
-  // ---------- playback ----------
+  // ---------- playback (purely client-side; no server concept of "now playing") ----------
 
   function resetPlaybackProgress() {
     stopPlaybackInterval();
@@ -292,7 +247,6 @@
 
   function chatLogEl() { return document.getElementById('chat-log'); }
   function scrollChatToBottom() { var el = chatLogEl(); el.scrollTop = el.scrollHeight; }
-
   function clearChatLogDom() { chatLogEl().innerHTML = ''; }
 
   function addUserMessage(text) {
@@ -371,31 +325,8 @@
   }
 
   function handleSuggestionClick(text) {
-    addUserMessage(text);
-    var shotNumMatch = text.match(/第\s*(\d+)\s*个分镜/);
-    if (shotNumMatch) {
-      var shotNum = parseInt(shotNumMatch[1], 10);
-      var idx = shotNum - 1;
-      if (state.shots[idx]) {
-        state.shots[idx].status = 'loading';
-        renderFilmstrip();
-        setStatus('重新生成第 ' + shotNum + ' 个分镜…', true);
-        addTimer(1100, function () {
-          state.shots[idx].status = 'ready';
-          state.shots[idx].hue = (state.shots[idx].hue + 40) % 360;
-          renderFilmstrip();
-          addAiText('第 ' + shotNum + ' 个分镜已经重新生成啦，风格调得更活泼了一些～');
-          setStatus('预览确认中，随时可以导出', false);
-        });
-      }
-    } else if (text.indexOf('背景音乐') !== -1) {
-      var bgmSel = document.getElementById('select-bgm');
-      bgmSel.selectedIndex = (bgmSel.selectedIndex + 1) % bgmSel.options.length;
-      state.bgm = bgmSel.value;
-      addAiText('已经换成「' + state.bgm + '」啦，感觉怎么样？');
-    } else if (text.indexOf('语速') !== -1) {
-      addAiText('好的，已经把旁白语速调快了一档。');
-    }
+    if (!state.activeProjectId) return;
+    postMessage(state.activeProjectId, text);
   }
 
   function setStatus(text, active) {
@@ -424,10 +355,75 @@
     });
   }
 
-  // ---------- new / reset project ----------
+  function deriveTitle(text) {
+    return text.length > 16 ? text.slice(0, 16) + '…' : text;
+  }
+
+  // ---------- applying one timeline entry (shared by history replay + live SSE) ----------
+
+  function applyEntry(entry) {
+    switch (entry.type) {
+      case 'user_message':
+        addUserMessage(entry.text);
+        break;
+      case 'ai_message':
+        addAiText(entry.text);
+        break;
+      case 'process_card':
+        addProcessCard(entry.id, entry.title, entry.meta, { done: entry.done, progress: entry.progress });
+        break;
+      case 'process_card_progress':
+        updateProcessCardProgress(entry.id, entry.progress);
+        break;
+      case 'process_card_done':
+        markProcessCardDone(entry.id, entry.title, entry.meta);
+        break;
+      case 'stepper':
+        state.doneSteps = new Set(entry.doneSteps);
+        state.currentStep = entry.currentStep;
+        renderStepper();
+        break;
+      case 'shots':
+        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
+        renderFilmstrip();
+        if (!state.shots.some(function (s) { return s.active; })) {
+          var readyIdx = state.shots.findIndex(function (s) { return s.status === 'ready'; });
+          if (readyIdx !== -1) selectShot(readyIdx);
+        }
+        break;
+      case 'status':
+        setStatus(entry.text, entry.active);
+        break;
+      case 'duration':
+        updateDurationInfo(entry.total, entry.done, entry.totalShots);
+        break;
+      case 'suggestions':
+        showSuggestions(entry.items);
+        break;
+    }
+  }
+
+  // ---------- SSE ----------
+
+  function closeEventSource() {
+    if (eventSource) { eventSource.close(); eventSource = null; }
+  }
+
+  function subscribeToProject(id) {
+    closeEventSource();
+    eventSource = new EventSource('/api/projects/' + id + '/events');
+    eventSource.onmessage = function (e) {
+      try { applyEntry(JSON.parse(e.data)); } catch (err) { /* ignore malformed frame */ }
+    };
+    eventSource.onerror = function () {
+      // Backend restarted or unreachable — surface it once, browser will keep retrying.
+    };
+  }
+
+  // ---------- new / reset project (local-only: no server call until first message) ----------
 
   function startNewProject(mode) {
-    clearAllTimers();
+    closeEventSource();
     state.mode = mode || state.mode;
     state.activeProjectId = null;
     state.projectTitle = '未命名项目';
@@ -455,92 +451,76 @@
     input.focus();
   }
 
-  // ---------- pipeline simulation ----------
+  // ---------- loading a project (history item, or the default ocean demo) ----------
 
-  function runPipeline(promptText) {
-    var shotCount = 6;
-    var totalDuration = 30;
-    state.totalDuration = totalDuration;
-
-    addTimer(500, function () {
-      state.doneSteps.add('script');
-      state.currentStep = 'outline';
-      renderStepper();
-      addProcessCard('script', '脚本已生成', Math.max(60, promptText.length * 6) + ' 字 · 时长约 ' + totalDuration + ' 秒', { done: true });
-      setStatus('大纲生成中…', true);
-    });
-
-    addTimer(1000, function () {
-      state.doneSteps.add('outline');
-      state.currentStep = 'storyboard';
-      renderStepper();
-      addProcessCard('outline', '大纲已生成', '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落', { done: true });
-      setStatus('拆分分镜中…', true);
-    });
-
-    addTimer(1600, function () {
+  function loadProjectFromServer(id) {
+    closeEventSource();
+    api('/api/projects/' + id).then(function (res) {
+      if (!res.ok) { showToast('加载项目失败：' + (res.body.error || res.status)); return; }
+      var proj = res.body;
+      state.activeProjectId = proj.id;
+      state.mode = proj.mode;
+      state.projectTitle = proj.title;
+      state.bgm = proj.bgm;
+      state.voice = proj.voice;
+      updateModeSwitchUI();
+      updateProjectTitleUI();
+      highlightActiveSidebar(id);
+      var bgmSel = document.getElementById('select-bgm');
+      var voiceSel = document.getElementById('select-voice');
+      if (bgmSel) bgmSel.value = proj.bgm;
+      if (voiceSel) voiceSel.value = proj.voice;
+      state.doneSteps = new Set();
+      state.currentStep = null;
       state.shots = [];
-      for (var i = 0; i < shotCount; i++) state.shots.push({ status: 'pending', hue: SHOT_HUES[i % SHOT_HUES.length] });
+      renderStepper();
       renderFilmstrip();
-      state.doneSteps.add('storyboard');
-      state.currentStep = 'frames';
-      renderStepper();
-      addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '每个大纲段落对应 1 个分镜', { done: true });
-      addProcessCard('frames', '分镜画面生成中', '', { progress: 0 });
-      setStatus('分镜画面生成中 (0/' + shotCount + ')', true);
-      updateDurationInfo(totalDuration, 0, shotCount);
-    });
-
-    for (var i = 0; i < shotCount; i++) {
-      (function (idx) {
-        addTimer(1600 + 500 * (idx + 1), function () {
-          state.shots[idx].status = 'ready';
-          renderFilmstrip();
-          var doneCount = idx + 1;
-          updateProcessCardProgress('frames', Math.round(doneCount / shotCount * 100));
-          setStatus('分镜画面生成中 (' + doneCount + '/' + shotCount + ')', true);
-          updateDurationInfo(totalDuration, doneCount, shotCount);
-          if (doneCount === shotCount) {
-            state.doneSteps.add('frames');
-            state.currentStep = 'voice';
-            renderStepper();
-            markProcessCardDone('frames', '分镜画面已生成', shotCount + ' 个分镜全部完成');
-            setStatus('分镜声音生成中…', true);
-          }
-        });
-      })(i);
-    }
-
-    var afterFrames = 1600 + 500 * shotCount;
-
-    addTimer(afterFrames + 700, function () {
-      state.doneSteps.add('voice');
-      renderStepper();
-      addProcessCard('voice', '分镜声音已生成', '旁白：' + state.voice + ' · 配乐：' + state.bgm, { done: true });
-      setStatus('按配音时长回调画面时长…', true);
-    });
-
-    addTimer(afterFrames + 1300, function () {
-      // loop back: 生成分镜声音 -> 生成分镜画面（按真实配音时长同步每个分镜的展示时长）
-      addProcessCard('sync', '已回调分镜画面时长', '已按配音时长重新同步 ' + shotCount + ' 个分镜的展示时长', { done: true });
-      state.currentStep = 'preview';
-      renderStepper();
-      setStatus('准备预览…', true);
-    });
-
-    addTimer(afterFrames + 1900, function () {
-      state.doneSteps.add('preview');
-      state.currentStep = 'export';
-      renderStepper();
-      selectShot(0);
-      addAiText('已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～');
-      showSuggestions(['重新生成第 3 个分镜', '换一个背景音乐', '语速再快一点']);
-      setStatus('预览确认中，随时可以导出', false);
+      resetPlayerToEmpty();
+      clearChatLogDom();
+      document.getElementById('suggestions').hidden = true;
+      proj.timeline.forEach(applyEntry);
+      subscribeToProject(id);
+    }).catch(function () {
+      showToast('无法连接后端服务（' + location.origin + '），请确认 node video-agent/server.js 正在运行');
     });
   }
 
-  function deriveTitle(text) {
-    return text.length > 16 ? text.slice(0, 16) + '…' : text;
+  function refreshProjectList() {
+    return api('/api/projects').then(function (res) {
+      if (!res.ok) return;
+      var listEl = document.getElementById('project-list');
+      listEl.innerHTML = '';
+      res.body.forEach(function (proj) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'project-item';
+        btn.dataset.id = proj.id;
+        var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + proj.thumbHue + '), oklch(70% 0.08 ' + (proj.thumbHue + 10) + '))';
+        btn.innerHTML =
+          '<div class="project-thumb" style="background:' + thumb + '"></div>' +
+          '<div class="project-item-body">' +
+            '<span class="project-item-title">' + escapeHtml(proj.title) + '</span>' +
+            '<span class="project-item-meta">' + (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta) + '</span>' +
+          '</div>';
+        btn.addEventListener('click', function () {
+          loadProjectFromServer(proj.id);
+          location.hash = '#/workspace';
+        });
+        listEl.appendChild(btn);
+        if (proj.id === state.activeProjectId) btn.classList.add('is-active');
+      });
+    });
+  }
+
+  // ---------- sending a message: creates a project on the first send, posts a
+  // follow-up message on any send after that ----------
+
+  function postMessage(id, text) {
+    api('/api/projects/' + id + '/message', { method: 'POST', body: { text: text } }).then(function (res) {
+      if (!res.ok) showToast('发送失败：' + (res.body.error || res.status));
+    }).catch(function () {
+      showToast('无法连接后端服务，请确认 node video-agent/server.js 正在运行');
+    });
   }
 
   function handleSend() {
@@ -548,120 +528,30 @@
     var text = input.value.trim();
     if (!text) return;
     input.value = '';
-    clearAllTimers();
-    state.activeProjectId = null;
-    state.doneSteps = new Set();
-    state.currentStep = 'script';
-    state.shots = [];
-    renderStepper();
-    renderFilmstrip();
-    resetPlayerToEmpty();
-    highlightActiveSidebar(null);
-    state.projectTitle = deriveTitle(text);
-    updateProjectTitleUI();
+
+    if (state.activeProjectId) {
+      addUserMessage(text); // optimistic; server will also emit this back over SSE for other viewers
+      postMessage(state.activeProjectId, text);
+      return;
+    }
+
     var emptyMsg = document.getElementById('chat-empty');
     if (emptyMsg) emptyMsg.remove();
-    var sug = document.getElementById('suggestions');
-    sug.hidden = true; sug.innerHTML = '';
-    addUserMessage(text);
-    setStatus('脚本生成中…', true);
-    runPipeline(text);
-  }
-
-  // ---------- loading history / demo projects ----------
-
-  function loadInProgressDemo(proj) {
-    state.doneSteps = new Set(['script', 'outline', 'storyboard']);
-    state.currentStep = 'frames';
-    var shotCount = proj.shots;
-    state.shots = [];
-    for (var i = 0; i < shotCount; i++) {
-      state.shots.push({ status: i < 4 ? 'ready' : 'loading', hue: SHOT_HUES[i % SHOT_HUES.length], active: i === 0 });
-    }
-    renderStepper();
-    renderFilmstrip();
-    clearChatLogDom();
-    addUserMessage(proj.prompt);
-    addProcessCard('script', '脚本已生成', '186 字 · 时长约 ' + proj.duration + ' 秒', { done: true });
-    addProcessCard('outline', '大纲已生成', '开场悬念 → 4 种海洋生物 → 结尾总结', { done: true });
-    addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '每个大纲段落对应 1 个分镜', { done: true });
-    addProcessCard('frames', '分镜画面生成中', '', { progress: 66 });
-    addAiText('已经为前 4 个分镜生成好画面啦，还剩 2 个在生成中，大概 20 秒，之后会接着生成配音和配乐。你可以先预览已完成的部分，如果不满意某个分镜的画风，直接告诉我要怎么改～');
-    showSuggestions(['重新生成第 5 个分镜', '换一个背景音乐', '语速再快一点']);
-    setStatus('分镜画面生成中 (4/' + shotCount + ')', true);
-    updateDurationInfo(proj.duration, 4, shotCount);
-    selectShot(0);
-  }
-
-  function loadCompletedDemo(proj) {
-    state.doneSteps = new Set(['script', 'outline', 'storyboard', 'frames', 'voice', 'preview', 'export']);
-    state.currentStep = null;
-    var shotCount = proj.shots;
-    var hueOffset = HISTORY.indexOf(proj);
-    state.shots = [];
-    for (var i = 0; i < shotCount; i++) {
-      state.shots.push({ status: 'ready', hue: SHOT_HUES[(i + hueOffset) % SHOT_HUES.length], active: i === 0 });
-    }
-    renderStepper();
-    renderFilmstrip();
-    clearChatLogDom();
-    addUserMessage(proj.prompt);
-    addProcessCard('script', '脚本已生成', '时长约 ' + proj.duration + ' 秒', { done: true });
-    addProcessCard('outline', '大纲已生成', '', { done: true });
-    addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '', { done: true });
-    addProcessCard('frames', '分镜画面已生成', shotCount + ' 个分镜全部完成', { done: true });
-    addProcessCard('voice', '分镜声音已生成', '旁白：' + proj.voice + ' · 配乐：' + proj.bgm, { done: true });
-    addProcessCard('sync', '已回调分镜画面时长', '已按配音时长重新同步展示时长', { done: true });
-    addAiText(proj.reply);
-    setStatus('创作完成', false);
-    updateDurationInfo(proj.duration, shotCount, shotCount);
-    state.bgm = proj.bgm;
-    state.voice = proj.voice;
-    var bgmSel = document.getElementById('select-bgm');
-    var voiceSel = document.getElementById('select-voice');
-    if (bgmSel) bgmSel.value = proj.bgm;
-    if (voiceSel) voiceSel.value = proj.voice;
-    selectShot(0);
-  }
-
-  function loadProject(id) {
-    var proj = HISTORY.filter(function (p) { return p.id === id; })[0];
-    if (!proj) return;
-    clearAllTimers();
-    state.activeProjectId = id;
-    state.mode = proj.mode;
-    state.projectTitle = proj.title;
-    updateModeSwitchUI();
+    document.getElementById('suggestions').hidden = true;
+    state.projectTitle = deriveTitle(text);
     updateProjectTitleUI();
-    highlightActiveSidebar(id);
-    var sug = document.getElementById('suggestions');
-    sug.hidden = true; sug.innerHTML = '';
-    if (id === 'ocean') {
-      loadInProgressDemo(proj);
-    } else {
-      loadCompletedDemo(proj);
-    }
-  }
+    addUserMessage(text);
+    setStatus('创建项目中…', true);
 
-  function buildProjectList() {
-    var listEl = document.getElementById('project-list');
-    listEl.innerHTML = '';
-    HISTORY.forEach(function (proj) {
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'project-item';
-      btn.dataset.id = proj.id;
-      btn.innerHTML =
-        '<div class="project-thumb" style="background:' + proj.thumb + '"></div>' +
-        '<div class="project-item-body">' +
-          '<span class="project-item-title">' + escapeHtml(proj.title) + '</span>' +
-          '<span class="project-item-meta">' + (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.meta) + '</span>' +
-        '</div>';
-      btn.addEventListener('click', function () {
-        loadProject(proj.id);
-        location.hash = '#/workspace';
-      });
-      listEl.appendChild(btn);
+    api('/api/projects', { method: 'POST', body: { mode: state.mode, prompt: text } }).then(function (res) {
+      if (!res.ok) { showToast('创建项目失败：' + (res.body.error || res.status)); setStatus('创建失败', false); return; }
+      var proj = res.body;
+      state.activeProjectId = proj.id;
+      subscribeToProject(proj.id);
+      refreshProjectList();
+    }).catch(function () {
+      showToast('无法连接后端服务（' + location.origin + '），请确认 node video-agent/server.js 正在运行');
+      setStatus('创建失败', false);
     });
   }
 
@@ -696,7 +586,7 @@
     document.getElementById('player-play-btn').addEventListener('click', togglePlayback);
     document.addEventListener('click', function (e) {
       if (e.target && e.target.id === 'mini-play-icon') togglePlayback();
-      if (e.target && (e.target.id === 'fullscreen-icon-btn' || e.target.closest && e.target.closest('#fullscreen-icon-btn'))) enterFullscreen();
+      if (e.target && (e.target.id === 'fullscreen-icon-btn' || (e.target.closest && e.target.closest('#fullscreen-icon-btn')))) enterFullscreen();
     });
 
     document.getElementById('btn-preview').addEventListener('click', enterFullscreen);
@@ -707,8 +597,12 @@
     });
 
     document.getElementById('btn-export').addEventListener('click', function () {
-      if (!state.doneSteps.has('preview')) { showToast('先完成分镜生成，再导出视频吧'); return; }
-      showToast('🎬 演示模式：这里会触发录屏导出真实视频文件（原型未接入真实渲染）');
+      if (!state.activeProjectId) { showToast('还没有项目可以导出'); return; }
+      api('/api/projects/' + state.activeProjectId + '/export', { method: 'POST' }).then(function (res) {
+        showToast(res.body.note || res.body.error || (res.ok ? '导出成功' : '导出失败'));
+      }).catch(function () {
+        showToast('无法连接后端服务，请确认 node video-agent/server.js 正在运行');
+      });
     });
 
     $all('[data-toast]').forEach(function (el) {
@@ -717,10 +611,12 @@
 
     document.getElementById('select-bgm').addEventListener('change', function (e) {
       state.bgm = e.target.value;
+      if (state.activeProjectId) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { bgm: e.target.value } }).catch(function () {});
       showToast('背景音乐已切换为「' + state.bgm + '」');
     });
     document.getElementById('select-voice').addEventListener('change', function (e) {
       state.voice = e.target.value;
+      if (state.activeProjectId) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { voice: e.target.value } }).catch(function () {});
       showToast('旁白语音已切换为「' + state.voice + '」');
     });
 
@@ -733,12 +629,12 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
-    buildProjectList();
+    refreshProjectList();
     attachStaticHandlers();
     renderStepper();
     renderFilmstrip();
     if (location.hash === '#/workspace') {
-      loadProject('ocean');
+      loadProjectFromServer('ocean');
     }
     render();
   });
