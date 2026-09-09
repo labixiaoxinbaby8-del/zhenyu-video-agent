@@ -246,6 +246,11 @@ button { font-family: var(--font-body); cursor: pointer; }
 }
 .step-label { font-size: 12px; font-weight: 500; color: var(--text-tertiary); transition: color 0.25s ease; }
 .step-connector { flex: 1; height: 2px; background: var(--border); margin-top: 13px; transition: background 0.25s ease; }
+.step-connector--loop { position: relative; height: 26px; margin-top: 0; background: none; }
+.step-connector--loop::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 13px; height: 2px; background: var(--border);
+}
+.loop-icon { position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%); width: 56px; height: 22px; overflow: visible; }
 .step.is-done .step-circle { background: var(--success); border-color: var(--success); }
 .step.is-done .step-label { color: var(--text); font-weight: 600; }
 .step.is-done + .step-connector { background: var(--success); }

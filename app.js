@@ -3,15 +3,19 @@
 
   // ---------- static data ----------
 
+  // Strict pipeline order per spec: 生成脚本 -> 生成大纲 -> 拆分分镜 -> 生成分镜画面
+  // -> 生成分镜声音 -> 预览&修改 -> 录屏输出. 生成分镜声音 loops back into 生成分镜画面
+  // (voice-over length re-syncs each shot's on-screen duration) before moving on to preview.
   var STEP_META = [
-    { key: 'script', label: '脚本' },
-    { key: 'storyboard', label: '分镜' },
-    { key: 'frames', label: '画面' },
-    { key: 'voice', label: '配音' },
-    { key: 'music', label: '配乐' },
-    { key: 'preview', label: '预览' },
-    { key: 'export', label: '导出' }
+    { key: 'script', label: '脚本', full: '生成脚本' },
+    { key: 'outline', label: '大纲', full: '生成大纲' },
+    { key: 'storyboard', label: '分镜', full: '拆分分镜' },
+    { key: 'frames', label: '画面', full: '生成分镜画面' },
+    { key: 'voice', label: '声音', full: '生成分镜声音' },
+    { key: 'preview', label: '预览', full: '预览 & 修改' },
+    { key: 'export', label: '导出', full: '录屏输出' }
   ];
+  var LOOP_AFTER_INDEX = 3; // connector between 'frames' (index 3) and 'voice' (index 4)
 
   var SHOT_HUES = [220, 340, 160, 90, 280, 40, 200, 120];
 
@@ -135,6 +139,13 @@
 
   // ---------- stepper ----------
 
+  function loopIconSvg() {
+    return '<svg class="loop-icon" viewBox="0 0 64 26" preserveAspectRatio="none" aria-hidden="true">' +
+      '<path d="M6 22 C 6 6, 58 6, 58 20" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"></path>' +
+      '<path d="M58 20 L 50 15 M58 20 L 51 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
+      '</svg>';
+  }
+
   function renderStepper() {
     var el = document.getElementById('stepper');
     el.innerHTML = '';
@@ -143,13 +154,15 @@
       var isCurrent = state.currentStep === step.key;
       var div = document.createElement('div');
       div.className = 'step' + (isDone ? ' is-done' : '') + (isCurrent ? ' is-current' : '');
+      div.title = step.full;
       div.innerHTML =
         '<div class="step-circle">' + (isDone ? checkSvg() : '<span>' + (i + 1) + '</span>') + '</div>' +
         '<div class="step-label">' + step.label + '</div>';
       el.appendChild(div);
       if (i < STEP_META.length - 1) {
         var conn = document.createElement('div');
-        conn.className = 'step-connector';
+        conn.className = 'step-connector' + (i === LOOP_AFTER_INDEX ? ' step-connector--loop' : '');
+        if (i === LOOP_AFTER_INDEX) conn.innerHTML = loopIconSvg();
         el.appendChild(conn);
       }
     });
@@ -359,18 +372,20 @@
 
   function handleSuggestionClick(text) {
     addUserMessage(text);
-    if (text.indexOf('重新生成') !== -1) {
-      var idx = 2;
+    var shotNumMatch = text.match(/第\s*(\d+)\s*个分镜/);
+    if (shotNumMatch) {
+      var shotNum = parseInt(shotNumMatch[1], 10);
+      var idx = shotNum - 1;
       if (state.shots[idx]) {
         state.shots[idx].status = 'loading';
         renderFilmstrip();
-        setStatus('重新生成第 3 个分镜…', true);
+        setStatus('重新生成第 ' + shotNum + ' 个分镜…', true);
         addTimer(1100, function () {
           state.shots[idx].status = 'ready';
           state.shots[idx].hue = (state.shots[idx].hue + 40) % 360;
           renderFilmstrip();
-          addAiText('第 3 个分镜已经重新生成啦，风格调得更活泼了一些～');
-          setStatus('创作完成，等待导出', false);
+          addAiText('第 ' + shotNum + ' 个分镜已经重新生成啦，风格调得更活泼了一些～');
+          setStatus('预览确认中，随时可以导出', false);
         });
       }
     } else if (text.indexOf('背景音乐') !== -1) {
@@ -429,7 +444,7 @@
     var empty = document.createElement('p');
     empty.id = 'chat-empty';
     empty.className = 'chat-empty';
-    empty.textContent = '在下方输入你想拍的视频内容，比如："帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐"。发送后，AI 会在这里逐步展示脚本、分镜、配音与配乐的生成过程。';
+    empty.textContent = '在下方输入你想拍的视频内容，比如："帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐"。发送后，AI 会严格按照"脚本→大纲→分镜→画面→声音→预览&修改→导出"的顺序，在这里逐步展示生成过程。';
     chatLogEl().appendChild(empty);
     var sug = document.getElementById('suggestions');
     sug.hidden = true; sug.innerHTML = '';
@@ -447,22 +462,30 @@
     var totalDuration = 30;
     state.totalDuration = totalDuration;
 
-    addTimer(600, function () {
+    addTimer(500, function () {
       state.doneSteps.add('script');
-      state.currentStep = 'storyboard';
+      state.currentStep = 'outline';
       renderStepper();
       addProcessCard('script', '脚本已生成', Math.max(60, promptText.length * 6) + ' 字 · 时长约 ' + totalDuration + ' 秒', { done: true });
-      setStatus('分镜拆分中…', true);
+      setStatus('大纲生成中…', true);
     });
 
-    addTimer(1300, function () {
+    addTimer(1000, function () {
+      state.doneSteps.add('outline');
+      state.currentStep = 'storyboard';
+      renderStepper();
+      addProcessCard('outline', '大纲已生成', '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落', { done: true });
+      setStatus('拆分分镜中…', true);
+    });
+
+    addTimer(1600, function () {
       state.shots = [];
       for (var i = 0; i < shotCount; i++) state.shots.push({ status: 'pending', hue: SHOT_HUES[i % SHOT_HUES.length] });
       renderFilmstrip();
       state.doneSteps.add('storyboard');
       state.currentStep = 'frames';
       renderStepper();
-      addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '开场 · 中间场景 · 结尾', { done: true });
+      addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '每个大纲段落对应 1 个分镜', { done: true });
       addProcessCard('frames', '分镜画面生成中', '', { progress: 0 });
       setStatus('分镜画面生成中 (0/' + shotCount + ')', true);
       updateDurationInfo(totalDuration, 0, shotCount);
@@ -470,7 +493,7 @@
 
     for (var i = 0; i < shotCount; i++) {
       (function (idx) {
-        addTimer(1300 + 500 * (idx + 1), function () {
+        addTimer(1600 + 500 * (idx + 1), function () {
           state.shots[idx].status = 'ready';
           renderFilmstrip();
           var doneCount = idx + 1;
@@ -482,27 +505,26 @@
             state.currentStep = 'voice';
             renderStepper();
             markProcessCardDone('frames', '分镜画面已生成', shotCount + ' 个分镜全部完成');
-            setStatus('旁白配音生成中…', true);
+            setStatus('分镜声音生成中…', true);
           }
         });
       })(i);
     }
 
-    var afterFrames = 1300 + 500 * shotCount;
+    var afterFrames = 1600 + 500 * shotCount;
 
     addTimer(afterFrames + 700, function () {
       state.doneSteps.add('voice');
-      state.currentStep = 'music';
       renderStepper();
-      addProcessCard('voice', '旁白配音已生成', '语音：' + state.voice, { done: true });
-      setStatus('挑选背景音乐…', true);
+      addProcessCard('voice', '分镜声音已生成', '旁白：' + state.voice + ' · 配乐：' + state.bgm, { done: true });
+      setStatus('按配音时长回调画面时长…', true);
     });
 
     addTimer(afterFrames + 1300, function () {
-      state.doneSteps.add('music');
+      // loop back: 生成分镜声音 -> 生成分镜画面（按真实配音时长同步每个分镜的展示时长）
+      addProcessCard('sync', '已回调分镜画面时长', '已按配音时长重新同步 ' + shotCount + ' 个分镜的展示时长', { done: true });
       state.currentStep = 'preview';
       renderStepper();
-      addProcessCard('music', '背景音乐已选定', '曲目：' + state.bgm, { done: true });
       setStatus('准备预览…', true);
     });
 
@@ -511,9 +533,9 @@
       state.currentStep = 'export';
       renderStepper();
       selectShot(0);
-      addAiText('已经为你生成好全部 ' + shotCount + ' 个分镜的画面、旁白和背景音乐啦，可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～');
+      addAiText('已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～');
       showSuggestions(['重新生成第 3 个分镜', '换一个背景音乐', '语速再快一点']);
-      setStatus('创作完成，等待导出', false);
+      setStatus('预览确认中，随时可以导出', false);
     });
   }
 
@@ -549,7 +571,7 @@
   // ---------- loading history / demo projects ----------
 
   function loadInProgressDemo(proj) {
-    state.doneSteps = new Set(['script', 'storyboard']);
+    state.doneSteps = new Set(['script', 'outline', 'storyboard']);
     state.currentStep = 'frames';
     var shotCount = proj.shots;
     state.shots = [];
@@ -561,9 +583,10 @@
     clearChatLogDom();
     addUserMessage(proj.prompt);
     addProcessCard('script', '脚本已生成', '186 字 · 时长约 ' + proj.duration + ' 秒', { done: true });
-    addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '开场 · 4 种海洋生物 · 结尾', { done: true });
+    addProcessCard('outline', '大纲已生成', '开场悬念 → 4 种海洋生物 → 结尾总结', { done: true });
+    addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '每个大纲段落对应 1 个分镜', { done: true });
     addProcessCard('frames', '分镜画面生成中', '', { progress: 66 });
-    addAiText('已经为前 4 个分镜生成好画面和旁白啦，还剩 2 个在生成中，大概 20 秒。你可以先预览已完成的部分，如果不满意某个分镜的画风，直接告诉我要怎么改～');
+    addAiText('已经为前 4 个分镜生成好画面啦，还剩 2 个在生成中，大概 20 秒，之后会接着生成配音和配乐。你可以先预览已完成的部分，如果不满意某个分镜的画风，直接告诉我要怎么改～');
     showSuggestions(['重新生成第 5 个分镜', '换一个背景音乐', '语速再快一点']);
     setStatus('分镜画面生成中 (4/' + shotCount + ')', true);
     updateDurationInfo(proj.duration, 4, shotCount);
@@ -571,7 +594,7 @@
   }
 
   function loadCompletedDemo(proj) {
-    state.doneSteps = new Set(['script', 'storyboard', 'frames', 'voice', 'music', 'preview', 'export']);
+    state.doneSteps = new Set(['script', 'outline', 'storyboard', 'frames', 'voice', 'preview', 'export']);
     state.currentStep = null;
     var shotCount = proj.shots;
     var hueOffset = HISTORY.indexOf(proj);
@@ -584,10 +607,11 @@
     clearChatLogDom();
     addUserMessage(proj.prompt);
     addProcessCard('script', '脚本已生成', '时长约 ' + proj.duration + ' 秒', { done: true });
+    addProcessCard('outline', '大纲已生成', '', { done: true });
     addProcessCard('storyboard', '已拆分为 ' + shotCount + ' 个分镜', '', { done: true });
     addProcessCard('frames', '分镜画面已生成', shotCount + ' 个分镜全部完成', { done: true });
-    addProcessCard('voice', '旁白配音已生成', '语音：' + proj.voice, { done: true });
-    addProcessCard('music', '背景音乐已选定', '曲目：' + proj.bgm, { done: true });
+    addProcessCard('voice', '分镜声音已生成', '旁白：' + proj.voice + ' · 配乐：' + proj.bgm, { done: true });
+    addProcessCard('sync', '已回调分镜画面时长', '已按配音时长重新同步展示时长', { done: true });
     addAiText(proj.reply);
     setStatus('创作完成', false);
     updateDurationInfo(proj.duration, shotCount, shotCount);
