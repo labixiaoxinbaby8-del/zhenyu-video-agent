@@ -31,7 +31,8 @@
     isPlaying: false,
     playbackTimer: null,
     elapsedSeconds: 0,
-    totalDuration: 30
+    totalDuration: 30,
+    subtitlesOn: true
   };
 
   var eventSource = null;
@@ -170,6 +171,7 @@
       scene.style.background = 'linear-gradient(165deg, oklch(80% 0.09 ' + shot.hue + '), oklch(58% 0.09 ' + (shot.hue + 20) + '))';
       if (msg) msg.hidden = true;
     }
+    updateSubtitleUI(shot, i);
     resetPlaybackProgress();
   }
 
@@ -178,7 +180,28 @@
     scene.style.background = '';
     var msg = scene.querySelector('.player-empty-msg');
     if (msg) msg.hidden = false;
+    updateSubtitleUI(null, -1);
     resetPlaybackProgress();
+  }
+
+  // ---------- subtitle toggle ----------
+
+  function updateSubtitleUI(shot, index) {
+    var el = document.getElementById('player-subtitle');
+    if (!el) return;
+    if (!state.subtitlesOn || !shot || shot.status !== 'ready') { el.hidden = true; return; }
+    el.textContent = shot.caption || ('第 ' + (index + 1) + ' 段画面旁白');
+    el.hidden = false;
+  }
+
+  function toggleSubtitles() {
+    state.subtitlesOn = !state.subtitlesOn;
+    var btn = document.getElementById('btn-subtitle');
+    btn.classList.toggle('is-active', state.subtitlesOn);
+    btn.setAttribute('aria-pressed', String(state.subtitlesOn));
+    var activeIdx = state.shots.findIndex(function (s) { return s.active; });
+    updateSubtitleUI(state.shots[activeIdx], activeIdx);
+    showToast(state.subtitlesOn ? '字幕已开启' : '字幕已关闭');
   }
 
   // ---------- playback (purely client-side; no server concept of "now playing") ----------
@@ -391,7 +414,7 @@
         renderStepper();
         break;
       case 'shots':
-        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
+        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
         renderFilmstrip();
         if (!state.shots.some(function (s) { return s.active; })) {
           var readyIdx = state.shots.findIndex(function (s) { return s.status === 'ready'; });
@@ -478,12 +501,23 @@
     }
     return LOCAL_DEFAULT_VOICE_BGM;
   }
+  // Splits the prompt into rough clauses to stand in for per-shot narration
+  // captions — a real backend would generate one narration line per shot
+  // alongside the script, but the local demo has no such text to draw on.
+  function localSplitCaptions(prompt, shotCount) {
+    var parts = prompt.split(/[，。！？,.!?、~]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (!parts.length) parts = [prompt];
+    var out = [];
+    for (var i = 0; i < shotCount; i++) out.push(parts[i % parts.length]);
+    return out;
+  }
   function localBuildContent(prompt) {
     var shotCount = localPickShotCount(prompt);
     var vb = localPickVoiceBgm(prompt);
     var totalDuration = shotCount * 5;
+    var captions = localSplitCaptions(prompt, shotCount);
     var shots = [];
-    for (var i = 0; i < shotCount; i++) shots.push({ status: 'pending', hue: LOCAL_SHOT_HUES[i % LOCAL_SHOT_HUES.length] });
+    for (var i = 0; i < shotCount; i++) shots.push({ status: 'pending', hue: LOCAL_SHOT_HUES[i % LOCAL_SHOT_HUES.length], caption: captions[i] });
     return {
       shotCount: shotCount, totalDuration: totalDuration, voice: vb.voice, bgm: vb.bgm, shots: shots,
       scriptMeta: Math.max(60, prompt.length * 6) + ' 字 · 时长约 ' + totalDuration + ' 秒',
@@ -517,7 +551,7 @@
     }, live);
 
     localAt(1600, function () {
-      var shots = content.shots.map(function (s) { return { status: 'pending', hue: s.hue }; });
+      var shots = content.shots.map(function (s) { return { status: 'pending', hue: s.hue, caption: s.caption }; });
       doneSteps.push('storyboard');
       applyEntry({ type: 'shots', shots: shots });
       applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + shotCount + ' 个分镜', meta: content.storyboardMeta, done: true });
@@ -530,8 +564,8 @@
     for (var i = 0; i < shotCount; i++) {
       (function (idx) {
         localAt(1600 + 500 * (idx + 1), function () {
-          var shots = state.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
-          shots[idx] = { status: 'ready', hue: content.shots[idx].hue };
+          var shots = state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+          shots[idx] = { status: 'ready', hue: content.shots[idx].hue, caption: content.shots[idx].caption };
           applyEntry({ type: 'shots', shots: shots });
           var doneCount = idx + 1;
           applyEntry({ type: 'process_card_progress', id: 'frames', progress: Math.round((doneCount / shotCount) * 100) });
@@ -581,13 +615,13 @@
     if (m) {
       var idx = parseInt(m[1], 10) - 1;
       if (state.shots[idx]) {
-        var shots = state.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
-        shots[idx] = { status: 'loading', hue: shots[idx].hue };
+        var shots = state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+        shots[idx] = { status: 'loading', hue: shots[idx].hue, caption: shots[idx].caption };
         applyEntry({ type: 'shots', shots: shots });
         applyEntry({ type: 'status', text: '重新生成第 ' + (idx + 1) + ' 个分镜…', active: true });
         localTimers.push(setTimeout(function () {
-          var shots2 = state.shots.map(function (s) { return { status: s.status, hue: s.hue }; });
-          shots2[idx] = { status: 'ready', hue: (shots2[idx].hue + 40) % 360 };
+          var shots2 = state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+          shots2[idx] = { status: 'ready', hue: (shots2[idx].hue + 40) % 360, caption: shots2[idx].caption };
           applyEntry({ type: 'shots', shots: shots2 });
           applyEntry({ type: 'ai_message', text: '第 ' + (idx + 1) + ' 个分镜已经重新生成啦，风格调得更活泼了一些～' });
           applyEntry({ type: 'status', text: '预览确认中，随时可以导出', active: false });
@@ -633,7 +667,7 @@
     if (id === 'ocean') {
       var readyTarget = Math.max(1, content.shotCount - 2);
       var remaining = content.shotCount - readyTarget;
-      var shots = content.shots.map(function (s, i) { return { status: i < readyTarget ? 'ready' : 'loading', hue: s.hue }; });
+      var shots = content.shots.map(function (s, i) { return { status: i < readyTarget ? 'ready' : 'loading', hue: s.hue, caption: s.caption }; });
       applyEntry({ type: 'shots', shots: shots });
       applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + content.shotCount + ' 个分镜', meta: content.storyboardMeta, done: true });
       applyEntry({ type: 'process_card', id: 'frames', title: '分镜画面生成中', meta: '', progress: Math.round((readyTarget / content.shotCount) * 100) });
@@ -647,7 +681,7 @@
       state.voice = content.voice;
       var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = content.bgm;
       var voiceSel = document.getElementById('select-voice'); if (voiceSel) voiceSel.value = content.voice;
-      var shots2 = content.shots.map(function (s) { return { status: 'ready', hue: s.hue }; });
+      var shots2 = content.shots.map(function (s) { return { status: 'ready', hue: s.hue, caption: s.caption }; });
       applyEntry({ type: 'shots', shots: shots2 });
       applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + content.shotCount + ' 个分镜', meta: '', done: true });
       applyEntry({ type: 'process_card', id: 'frames', title: '分镜画面已生成', meta: content.shotCount + ' 个分镜全部完成', done: true });
@@ -869,13 +903,16 @@
     });
 
     document.getElementById('btn-preview').addEventListener('click', enterFullscreen);
+    document.getElementById('btn-fullscreen-toolbar').addEventListener('click', enterFullscreen);
     document.getElementById('player-close-btn').addEventListener('click', exitFullscreen);
     document.getElementById('backdrop').addEventListener('click', exitFullscreen);
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') exitFullscreen();
     });
 
-    document.getElementById('btn-export').addEventListener('click', function () {
+    document.getElementById('btn-subtitle').addEventListener('click', toggleSubtitles);
+
+    function runExport() {
       if (!state.activeProjectId) { showToast('还没有项目可以导出'); return; }
       if (backendAvailable === false) {
         if (!state.doneSteps.has('preview')) { showToast('先完成分镜生成，再导出视频吧'); return; }
@@ -887,7 +924,9 @@
       }).catch(function () {
         showToast('无法连接后端服务，请确认 node video-agent/server.js 正在运行');
       });
-    });
+    }
+    document.getElementById('btn-export').addEventListener('click', runExport);
+    document.getElementById('btn-record-export').addEventListener('click', runExport);
 
     $all('[data-toast]').forEach(function (el) {
       el.addEventListener('click', function () { showToast(el.dataset.toast); });
