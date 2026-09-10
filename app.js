@@ -50,9 +50,20 @@
 
   // Shown at the top of a fresh project's chat log so the mode you just
   // picked is explained in place, not just back on the home page cards.
+  // (The mode name itself isn't repeated here — the tip is already
+  // color-coded to match the mode, and the meta row states it too.)
   function modeIntro(mode) {
-    if (mode === 'html') return 'HTML 视频模式：AI 为每个分镜生成可动的网页动画，多段动画拼接成片。';
-    return '图片轮播模式：AI 为每个分镜调用文生图模型生成静态画面，多张图片按节奏轮播剪辑成片。';
+    if (mode === 'html') return 'AI 为每个分镜生成可动的网页动画，多段动画拼接成片';
+    return 'AI 为每个分镜调用文生图模型生成静态画面，多张图片按节奏轮播剪辑成片';
+  }
+
+  // Small icon matching the mode's card on the home page, reused here so
+  // the tip visually ties back to the card you just clicked.
+  function modeTipIconSvg(mode) {
+    if (mode === 'html') {
+      return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6 L3 12 L8 18"></path><path d="M16 6 L21 12 L16 18"></path><path d="M13.5 4.5 L10.5 19.5"></path></svg>';
+    }
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="13" height="10" rx="2"></rect><rect x="8" y="10" width="13" height="10" rx="2"></rect></svg>';
   }
 
   // A couple of ready-made prompts per mode, shown as clickable chips in the
@@ -130,6 +141,20 @@
   function renderFilmstrip() {
     var el = document.getElementById('filmstrip');
     el.innerHTML = '';
+    if (!state.shots.length) {
+      // Reserve the same row height empty as populated (4 dashed
+      // placeholders) so generating a project doesn't shove the toolbar row
+      // below it down the page.
+      for (var p = 0; p < 4; p++) {
+        var ph = document.createElement('div');
+        ph.className = 'filmstrip-item is-pending is-placeholder';
+        el.appendChild(ph);
+      }
+      document.getElementById('filmstrip-label').textContent = '分镜列表 · 共 0 个分镜';
+      updatePlayerEmptyState();
+      updateToolbarDisabledState();
+      return;
+    }
     var durationLabel = shotDurationLabel();
     state.shots.forEach(function (shot, i) {
       var col = document.createElement('div');
@@ -203,7 +228,17 @@
       el.appendChild(col);
     });
     document.getElementById('filmstrip-label').textContent = '分镜列表 · 共 ' + state.shots.length + ' 个分镜';
+    updatePlayerEmptyState();
     updateToolbarDisabledState();
+  }
+
+  // The player looks like a fully "live" video (play button, scrubber,
+  // volume/settings/fullscreen) even with nothing generated yet unless we
+  // explicitly dial it back — toggled whenever the shot list changes.
+  function updatePlayerEmptyState() {
+    var hasReady = state.shots.some(function (s) { return s.status === 'ready'; });
+    var wrap = document.getElementById('player-wrap');
+    if (wrap) wrap.classList.toggle('is-empty', !hasReady);
   }
 
   function updateTitleOverlay(shot) {
@@ -239,6 +274,7 @@
     if (msg) msg.hidden = false;
     updateSubtitleUI(null, -1);
     updateTitleOverlay(null);
+    updatePlayerEmptyState();
     resetPlaybackProgress();
   }
 
@@ -1202,8 +1238,13 @@
     var empty = document.createElement('div');
     empty.id = 'chat-empty';
     empty.className = 'chat-empty';
-    empty.innerHTML = '<strong>' + escapeHtml(modeIntro(state.mode)) + '</strong><br><br>' +
-      '输入一句创作提示词，也可以直接粘贴一段知识主题或长文档。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。';
+    var tip = document.createElement('div');
+    tip.className = 'mode-tip ' + (state.mode === 'html' ? 'mode-tip--b' : 'mode-tip--a');
+    tip.innerHTML = modeTipIconSvg(state.mode) + '<span>' + escapeHtml(modeIntro(state.mode)) + '</span>';
+    empty.appendChild(tip);
+    var genericText = document.createElement('p');
+    genericText.textContent = '输入一句创作提示词，也可以直接粘贴一段知识主题或长文档。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。';
+    empty.appendChild(genericText);
     var exWrap = document.createElement('div');
     exWrap.className = 'chat-empty-examples';
     var exLabel = document.createElement('span');
