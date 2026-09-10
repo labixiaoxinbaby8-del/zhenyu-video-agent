@@ -53,6 +53,9 @@ button { font-family: var(--font-body); cursor: pointer; }
 .btn-outline { color: var(--text); }
 .btn-primary { border: none; background: var(--text); color: var(--bg); }
 .btn:hover { filter: brightness(0.97); }
+.btn:disabled, .toolbar-btn:disabled, .ghost-btn-sm:disabled {
+  opacity: 0.4; cursor: not-allowed; pointer-events: none;
+}
 .btn-primary:hover { filter: brightness(1.15); }
 
 .brand-mark { flex: none; }
@@ -667,6 +670,13 @@ button.meta-row__item--editable strong { color: var(--text-secondary); }
   background: var(--surface); font-size: 12px; font-weight: 500; color: var(--text-secondary);
 }
 .suggestion-chip:hover { background: var(--surface-alt); }
+
+.chat-empty-examples { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.chat-empty-examples__label { font-size: 11.5px; font-weight: 600; color: var(--text-tertiary); }
+.chat-empty-examples .suggestion-chip {
+  height: auto; min-height: 32px; width: 100%; text-align: left;
+  white-space: normal; line-height: 1.5; padding: 8px 13px; border-radius: 12px;
+}
 
 .chat-input-row { border-top: 1px solid var(--border); padding: 16px 22px; display: flex; align-items: flex-end; gap: 10px; flex: none; }
 .chat-input {

@@ -55,6 +55,21 @@
     return '图片轮播模式：AI 为每个分镜调用文生图模型生成静态画面，多张图片按节奏轮播剪辑成片。';
   }
 
+  // A couple of ready-made prompts per mode, shown as clickable chips in the
+  // empty chat log so starting from scratch isn't the only option.
+  function modeExamplePrompts(mode) {
+    if (mode === 'html') {
+      return [
+        '做一支 20 秒的新品发布预告片，突出温暖色调和限时优惠，风格干净有质感',
+        '用一支 25 秒的动态视频讲解一个客户成功案例，突出前后数据对比'
+      ];
+    }
+    return [
+      '做一支 30 秒的儿童科普视频，介绍海洋生物，风格活泼可爱，配欢快背景音乐',
+      '帮我做一条 15 秒的小红书种草视频，主打一款保湿精华，节奏要快、有网感'
+    ];
+  }
+
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -188,6 +203,7 @@
       el.appendChild(col);
     });
     document.getElementById('filmstrip-label').textContent = '分镜列表 · 共 ' + state.shots.length + ' 个分镜';
+    updateToolbarDisabledState();
   }
 
   function updateTitleOverlay(shot) {
@@ -506,12 +522,13 @@
   function renderMetaRow() {
     var el = document.getElementById('meta-row');
     if (!el) return;
+    var hasProject = !!state.activeProjectId;
     var parts = [
       { label: '当前模式', value: modeLabel(state.mode) + '模式' },
       { label: '字幕', value: state.subtitlesOn ? '已开启' : '已关闭' },
-      { label: '背景音乐', value: state.bgm, field: 'bgm' },
-      { label: '旁白', value: state.voice, field: 'voice' },
-      { label: '视频时长', value: formatTime(state.totalDuration) }
+      { label: '背景音乐', value: hasProject ? state.bgm : '生成后自动选择', field: hasProject ? 'bgm' : null },
+      { label: '旁白', value: hasProject ? state.voice : '生成后自动选择', field: hasProject ? 'voice' : null },
+      { label: '视频时长', value: hasProject ? formatTime(state.totalDuration) : '—' }
     ];
     el.innerHTML = parts.map(function (p, i) {
       var sep = i ? '<span class="meta-row__sep">|</span>' : '';
@@ -521,6 +538,22 @@
         : '<span class="meta-row__item">' + body + '</span>';
       return sep + tag;
     }).join('');
+    updateToolbarDisabledState();
+  }
+
+  // ---------- disable dead-end toolbar controls until there's something for them to act on ----------
+
+  function updateToolbarDisabledState() {
+    var hasProject = !!state.activeProjectId;
+    var hasShots = state.shots.length > 0;
+    ['btn-ratio', 'btn-fullscreen-toolbar', 'btn-record-export', 'btn-export'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.disabled = !hasProject;
+    });
+    ['btn-add-shot', 'btn-batch-edit'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.disabled = !hasShots;
+    });
   }
 
   // ---------- direct edits (bgm/voice cycling, shot add/delete/reorder/caption) ----------
@@ -1171,6 +1204,26 @@
     empty.className = 'chat-empty';
     empty.innerHTML = '<strong>' + escapeHtml(modeIntro(state.mode)) + '</strong><br><br>' +
       '输入一句创作提示词，也可以直接粘贴一段知识主题或长文档。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。';
+    var exWrap = document.createElement('div');
+    exWrap.className = 'chat-empty-examples';
+    var exLabel = document.createElement('span');
+    exLabel.className = 'chat-empty-examples__label';
+    exLabel.textContent = '试试这些：';
+    exWrap.appendChild(exLabel);
+    modeExamplePrompts(state.mode).forEach(function (text) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'suggestion-chip';
+      chip.textContent = text;
+      chip.addEventListener('click', function () {
+        var input = document.getElementById('chat-input');
+        input.value = text;
+        input.dispatchEvent(new Event('input'));
+        input.focus();
+      });
+      exWrap.appendChild(chip);
+    });
+    empty.appendChild(exWrap);
     chatLogEl().appendChild(empty);
     var sug = document.getElementById('suggestions');
     sug.hidden = true; sug.innerHTML = '';
@@ -1206,6 +1259,7 @@
 
     if (backendAvailable === false) {
       state.activeProjectId = 'local-' + Date.now();
+      updateToolbarDisabledState();
       localRunPipeline(text, true);
       return;
     }
@@ -1214,6 +1268,7 @@
       if (!res.ok) { showToast('创建项目失败：' + (res.body.error || res.status)); setStatus('创建失败', false); return; }
       var proj = res.body;
       state.activeProjectId = proj.id;
+      updateToolbarDisabledState();
       refreshProjectList();
       // The server already started the pipeline synchronously (its first
       // step fires ~150ms later), and opening the SSE connection below takes

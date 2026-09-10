@@ -374,7 +374,7 @@
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.65a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.35 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04Z"></path></svg>
       </button>
       <span class="user-avatar" title="labixiaoxinbaby8@gmail.com">帧</span>
-      <button type="button" id="btn-export" class="btn btn-primary">
+      <button type="button" id="btn-export" class="btn btn-primary" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
         <span class="btn-label">导出视频</span>
       </button>
@@ -411,15 +411,15 @@
             <span class="switch-track"><span class="switch-thumb"></span></span>
           </span>
         </label>
-        <button type="button" id="btn-ratio" class="toolbar-btn" aria-label="画面比例">
+        <button type="button" id="btn-ratio" class="toolbar-btn" aria-label="画面比例" disabled>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"></rect></svg>
           <span id="ratio-label">16:9</span>
         </button>
-        <button type="button" id="btn-fullscreen-toolbar" class="toolbar-btn" aria-label="全屏">
+        <button type="button" id="btn-fullscreen-toolbar" class="toolbar-btn" aria-label="全屏" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M21 16v3a2 2 0 0 1-2 2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
           全屏
         </button>
-        <button type="button" id="btn-record-export" class="toolbar-btn toolbar-btn--primary" aria-label="录屏导出视频">
+        <button type="button" id="btn-record-export" class="toolbar-btn toolbar-btn--primary" aria-label="录屏导出视频" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2.5"></rect><path d="M16 10.5 21.5 7v10L16 13.5Z"></path></svg>
           <span class="btn-label">录屏导出</span>
         </button>
@@ -459,11 +459,11 @@
         <div class="filmstrip-header">
           <span id="filmstrip-label" class="filmstrip-label">分镜列表 · 共 0 个分镜</span>
           <div class="filmstrip-header-actions">
-            <button type="button" id="btn-add-shot" class="ghost-btn-sm">
+            <button type="button" id="btn-add-shot" class="ghost-btn-sm" disabled>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
               添加分镜
             </button>
-            <button type="button" id="btn-batch-edit" class="ghost-btn-sm"
+            <button type="button" id="btn-batch-edit" class="ghost-btn-sm" disabled>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"></path><path d="M3 6h.01M3 12h.01M3 18h.01"></path></svg>
               批量编辑
             </button>
