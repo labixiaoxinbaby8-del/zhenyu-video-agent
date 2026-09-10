@@ -133,7 +133,10 @@ function buildContent(prompt) {
     outlineMeta: '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落',
     storyboardMeta: '每个大纲段落对应 1 个分镜',
     completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～',
-    summaryItems: ['脚本生成', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成', '旁白配音', '字幕生成', '背景音乐选择', '剪辑合成']
+    summaryItems: ['脚本生成', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成', '旁白配音', '字幕生成', '背景音乐选择', '剪辑合成'],
+    scriptText: '【开场】\n' + prompt +
+      '\n\n【正文】围绕以上主题自动扩写为 ' + shotCount + ' 个分镜的解说词，每个分镜约 ' + Math.round(totalDuration / shotCount) + ' 秒，配合' + vb.voice + '旁白与《' + vb.bgm + '》背景音乐。' +
+      '\n\n【结尾】总结核心信息，引导观众记住重点，字幕与画面同步呈现。'
   };
 }
 
@@ -263,9 +266,11 @@ function runPipelineSteps(project, content, live) {
     project.doneSteps.push('preview');
     project.currentStep = 'export';
     project.status = 'ready';
+    project.script = content.scriptText;
     pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
     pushEntry(project, { type: 'summary_card', items: content.summaryItems });
     pushEntry(project, { type: 'ai_message', text: content.completionText });
+    pushEntry(project, { type: 'script_link', script: content.scriptText });
     pushEntry(project, { type: 'suggestions', items: ['调整分镜顺序', '换一个背景音乐', '修改旁白音色', '重新生成第 3 个分镜'] });
     pushEntry(project, { type: 'status', text: '预览确认中，随时可以导出', active: false });
   });
@@ -416,7 +421,7 @@ function publicProject(p) {
     id: p.id, mode: p.mode, title: p.title, prompt: p.prompt, meta: p.meta,
     thumbHue: p.thumbHue, status: p.status, doneSteps: p.doneSteps, currentStep: p.currentStep,
     shots: p.shots, voice: p.voice, bgm: p.bgm, totalDuration: p.totalDuration,
-    exported: p.exported, timeline: p.timeline, updatedAt: p.updatedAt
+    exported: p.exported, timeline: p.timeline, updatedAt: p.updatedAt, script: p.script || ''
   };
 }
 
@@ -428,7 +433,7 @@ var server = http.createServer(function (req, res) {
   if (m === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type'
     });
     return res.end();
@@ -475,6 +480,13 @@ var server = http.createServer(function (req, res) {
       saveDb();
       sendJson(res, 200, publicProject(proj2));
     }).catch(function () { sendJson(res, 400, { error: '请求体不是合法 JSON' }); });
+  }
+  if (m1 && m === 'DELETE') {
+    var delIdx = db.projects.findIndex(function (p) { return p.id === m1[1]; });
+    if (delIdx === -1) return sendJson(res, 404, { error: '项目不存在' });
+    db.projects.splice(delIdx, 1);
+    saveDb();
+    return sendJson(res, 200, { ok: true });
   }
 
   // GET /api/projects/:id/events — SSE live updates

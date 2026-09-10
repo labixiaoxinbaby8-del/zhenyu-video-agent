@@ -23,10 +23,13 @@
     muted: false,
     ratio: '16:9',
     chatExpanded: false,
-    batchEdit: false
+    batchEdit: false,
+    scriptText: ''
   };
 
   var lastProjectList = []; // cached most-recent sidebar list, for client-side search filtering
+  var localDeletedIds = new Set(); // seed ids removed via the sidebar "⋮" menu in local (no-backend) mode
+  var openProjectMenuEl = null; // the currently-open sidebar "⋮" dropdown, if any
 
   var BGM_CANDIDATES = ['海风轻快民谣', '阳光电子流行', '温柔钢琴独奏', '探索感管弦乐'];
   var VOICE_CANDIDATES = ['知性女声', '活泼童声', '沉稳男声', '温柔姐姐音'];
@@ -399,6 +402,27 @@
     scrollChatToBottom();
   }
 
+  function addScriptLink() {
+    var wrap = document.createElement('div');
+    wrap.className = 'msg msg-ai';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'msg-ai-link-btn';
+    btn.textContent = '查看脚本';
+    btn.addEventListener('click', openScriptModal);
+    wrap.appendChild(btn);
+    chatLogEl().appendChild(wrap);
+    scrollChatToBottom();
+  }
+
+  function openScriptModal() {
+    document.getElementById('script-modal-body').textContent = state.scriptText || '暂无脚本内容';
+    document.getElementById('script-modal').hidden = false;
+  }
+  function closeScriptModal() {
+    document.getElementById('script-modal').hidden = true;
+  }
+
   function showSuggestions(list) {
     var el = document.getElementById('suggestions');
     el.innerHTML = '';
@@ -585,6 +609,10 @@
       case 'summary_card':
         addSummaryCard(entry.items);
         break;
+      case 'script_link':
+        state.scriptText = entry.script || '';
+        addScriptLink();
+        break;
       case 'shots':
         state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
         renderFilmstrip();
@@ -701,7 +729,10 @@
       outlineMeta: '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落',
       storyboardMeta: '每个大纲段落对应 1 个分镜',
       completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～',
-      summaryItems: ['脚本生成', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成', '旁白配音', '字幕生成', '背景音乐选择', '剪辑合成']
+      summaryItems: ['脚本生成', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成', '旁白配音', '字幕生成', '背景音乐选择', '剪辑合成'],
+      scriptText: '【开场】\n' + prompt +
+        '\n\n【正文】围绕以上主题自动扩写为 ' + shotCount + ' 个分镜的解说词，每个分镜约 ' + Math.round(totalDuration / shotCount) + ' 秒，配合' + vb.voice + '旁白与《' + vb.bgm + '》背景音乐。' +
+        '\n\n【结尾】总结核心信息，引导观众记住重点，字幕与画面同步呈现。'
     };
   }
 
@@ -794,6 +825,7 @@
       applyEntry({ type: 'stepper', currentStep: 'export', doneSteps: doneSteps.slice() });
       applyEntry({ type: 'summary_card', items: content.summaryItems });
       applyEntry({ type: 'ai_message', text: content.completionText });
+      applyEntry({ type: 'script_link', script: content.scriptText });
       applyEntry({ type: 'suggestions', items: ['调整分镜顺序', '换一个背景音乐', '修改旁白音色', '重新生成第 3 个分镜'] });
       applyEntry({ type: 'status', text: '预览确认中，随时可以导出', active: false });
     }, live);
@@ -834,6 +866,7 @@
 
   function loadLocalProject(id) {
     localClearTimers();
+    if (localDeletedIds.has(id)) return;
     var seed = LOCAL_SEEDS.filter(function (s) { return s.id === id; })[0];
     if (!seed) return;
     state.activeProjectId = id;
@@ -882,37 +915,107 @@
       applyEntry({ type: 'stepper', currentStep: null, doneSteps: ['script', 'outline', 'storyboard', 'frames', 'voice', 'preview', 'export'] });
       applyEntry({ type: 'summary_card', items: content.summaryItems });
       applyEntry({ type: 'ai_message', text: seed.reply || content.completionText });
+      applyEntry({ type: 'script_link', script: content.scriptText });
       applyEntry({ type: 'status', text: '创作完成', active: false });
       applyEntry({ type: 'duration', total: content.totalDuration, done: content.shotCount, totalShots: content.shotCount });
     }
   }
 
+  // ---------- shared sidebar row (thumb + title/meta + "⋮" rename/delete menu) ----------
+
+  function closeAnyProjectMenu() {
+    if (openProjectMenuEl) { openProjectMenuEl.remove(); openProjectMenuEl = null; }
+  }
+
+  function renameProject(id, isLocal) {
+    var current = isLocal
+      ? (LOCAL_SEEDS.find(function (s) { return s.id === id; }) || {}).title
+      : (lastProjectList.find(function (p) { return p.id === id; }) || {}).title;
+    var next = window.prompt('重命名项目', current || '');
+    if (next === null) return;
+    next = next.trim();
+    if (!next) return;
+    if (isLocal) {
+      var seed = LOCAL_SEEDS.find(function (s) { return s.id === id; });
+      if (seed) seed.title = next;
+      filterProjectList(document.getElementById('project-search').value);
+    } else {
+      api('/api/projects/' + id, { method: 'PATCH', body: { title: next } }).then(function () { refreshProjectList(); }).catch(function () {});
+    }
+    if (state.activeProjectId === id) { state.projectTitle = next; updateProjectTitleUI(); }
+  }
+
+  function deleteProject(id, isLocal) {
+    if (!window.confirm('确定要删除这个项目吗？此操作不可撤销。')) return;
+    if (isLocal) {
+      localDeletedIds.add(id);
+      filterProjectList(document.getElementById('project-search').value);
+    } else {
+      api('/api/projects/' + id, { method: 'DELETE' }).then(function () { refreshProjectList(); }).catch(function () {});
+    }
+    if (state.activeProjectId === id) startNewProject(state.mode);
+  }
+
+  function buildProjectRow(opts) {
+    // opts: { id, title, metaText, thumbHue, onOpen, isLocal }
+    var row = document.createElement('div');
+    row.className = 'project-item';
+    row.dataset.id = opts.id;
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + opts.thumbHue + '), oklch(70% 0.08 ' + (opts.thumbHue + 10) + '))';
+    row.innerHTML =
+      '<div class="project-thumb" style="background:' + thumb + '"></div>' +
+      '<div class="project-item-body">' +
+        '<span class="project-item-title">' + escapeHtml(opts.title) + '</span>' +
+        '<span class="project-item-meta">' + opts.metaText + '</span>' +
+      '</div>' +
+      '<button type="button" class="project-item-menu-btn" aria-label="更多操作">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>' +
+      '</button>';
+    row.addEventListener('click', opts.onOpen);
+    row.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); opts.onOpen(); } });
+    row.querySelector('.project-item-menu-btn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (openProjectMenuEl && openProjectMenuEl.dataset.forId === opts.id) { closeAnyProjectMenu(); return; }
+      closeAnyProjectMenu();
+      var menu = document.createElement('div');
+      menu.className = 'project-item-menu';
+      menu.dataset.forId = opts.id;
+      menu.innerHTML = '<button type="button" data-action="rename">重命名</button><button type="button" data-action="delete">删除项目</button>';
+      row.appendChild(menu);
+      openProjectMenuEl = menu;
+      menu.addEventListener('click', function (e2) {
+        e2.stopPropagation();
+        var action = e2.target.closest('[data-action]') && e2.target.closest('[data-action]').dataset.action;
+        if (action === 'rename') renameProject(opts.id, opts.isLocal);
+        else if (action === 'delete') deleteProject(opts.id, opts.isLocal);
+        closeAnyProjectMenu();
+      });
+      setTimeout(function () { document.addEventListener('click', closeAnyProjectMenu, { once: true }); }, 0);
+    });
+    if (opts.id === state.activeProjectId) row.classList.add('is-active');
+    return row;
+  }
+
   function renderLocalProjectItems(seeds) {
     var listEl = document.getElementById('project-list');
     listEl.innerHTML = '';
+    seeds = seeds.filter(function (s) { return !localDeletedIds.has(s.id); });
     if (!seeds.length) {
       listEl.innerHTML = '<p class="project-empty">没有找到匹配的项目</p>';
       return;
     }
     seeds.forEach(function (seed) {
-      var hue = localHueForText(seed.id);
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'project-item';
-      btn.dataset.id = seed.id;
-      var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + hue + '), oklch(70% 0.08 ' + (hue + 10) + '))';
-      btn.innerHTML =
-        '<div class="project-thumb" style="background:' + thumb + '"></div>' +
-        '<div class="project-item-body">' +
-          '<span class="project-item-title">' + escapeHtml(seed.title) + '</span>' +
-          '<span class="project-item-meta">' + (seed.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(seed.meta) + '</span>' +
-        '</div>';
-      btn.addEventListener('click', function () {
-        loadLocalProject(seed.id);
-        location.hash = '#/workspace';
+      var row = buildProjectRow({
+        id: seed.id,
+        title: seed.title,
+        metaText: (seed.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(seed.meta),
+        thumbHue: localHueForText(seed.id),
+        isLocal: true,
+        onOpen: function () { loadLocalProject(seed.id); location.hash = '#/workspace'; }
       });
-      listEl.appendChild(btn);
-      if (seed.id === state.activeProjectId) btn.classList.add('is-active');
+      listEl.appendChild(row);
     });
   }
   function buildLocalProjectList() { renderLocalProjectItems(LOCAL_SEEDS); }
@@ -929,23 +1032,15 @@
       return;
     }
     list.forEach(function (proj) {
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'project-item';
-      btn.dataset.id = proj.id;
-      var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + proj.thumbHue + '), oklch(70% 0.08 ' + (proj.thumbHue + 10) + '))';
-      btn.innerHTML =
-        '<div class="project-thumb" style="background:' + thumb + '"></div>' +
-        '<div class="project-item-body">' +
-          '<span class="project-item-title">' + escapeHtml(proj.title) + '</span>' +
-          '<span class="project-item-meta">' + (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta) + '</span>' +
-        '</div>';
-      btn.addEventListener('click', function () {
-        loadProjectFromServer(proj.id);
-        location.hash = '#/workspace';
+      var row = buildProjectRow({
+        id: proj.id,
+        title: proj.title,
+        metaText: (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta),
+        thumbHue: proj.thumbHue,
+        isLocal: false,
+        onOpen: function () { loadProjectFromServer(proj.id); location.hash = '#/workspace'; }
       });
-      listEl.appendChild(btn);
-      if (proj.id === state.activeProjectId) btn.classList.add('is-active');
+      listEl.appendChild(row);
     });
   }
 
@@ -1120,7 +1215,12 @@
     document.getElementById('player-close-btn').addEventListener('click', exitFullscreen);
     document.getElementById('backdrop').addEventListener('click', exitFullscreen);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') exitFullscreen();
+      if (e.key === 'Escape') { exitFullscreen(); closeScriptModal(); }
+    });
+
+    document.getElementById('script-modal-close').addEventListener('click', closeScriptModal);
+    document.getElementById('script-modal').addEventListener('click', function (e) {
+      if (e.target.id === 'script-modal') closeScriptModal();
     });
 
     document.getElementById('chk-subtitle').addEventListener('change', function (e) { toggleSubtitles(e.target.checked); });
