@@ -140,6 +140,26 @@ function buildContent(prompt) {
   };
 }
 
+// ---------- pipeline timer registry (so a "cancel" can actually stop a live
+// run — kept out of the project object itself since setTimeout handles
+// aren't JSON-serializable and project objects get persisted via saveDb) ----------
+
+var pipelineTimers = {}; // projectId -> array of Timeout handles
+
+function cancelPipeline(project) {
+  var timers = pipelineTimers[project.id];
+  var hadTimers = !!(timers && timers.length);
+  if (timers) { timers.forEach(clearTimeout); delete pipelineTimers[project.id]; }
+  if (project.doneSteps.indexOf('preview') !== -1) return false; // already finished — nothing to cancel
+  if (!hadTimers && project.status !== 'running') return false; // instant (seed) runs have nothing in flight either
+  project.currentStep = null;
+  project.status = 'cancelled';
+  project.meta = '已取消';
+  pushEntry(project, { type: 'ai_message', text: '已取消生成。你可以重新输入提示词开始一个新项目，或者继续和我说说想怎么调整。' });
+  pushEntry(project, { type: 'status', text: '已取消，等待新的指令', active: false });
+  return true;
+}
+
 // ---------- SSE subscriber registry ----------
 
 var subscribers = {}; // projectId -> Set<res>
@@ -175,8 +195,13 @@ function runPipelineSteps(project, content, live) {
   var shotCount = content.shotCount;
 
   function at(delay, fn) {
-    if (live) setTimeout(fn, delay);
-    else fn();
+    if (live) {
+      var t = setTimeout(fn, delay);
+      if (!pipelineTimers[project.id]) pipelineTimers[project.id] = [];
+      pipelineTimers[project.id].push(t);
+    } else {
+      fn();
+    }
   }
 
   at(150, function () {
@@ -273,6 +298,7 @@ function runPipelineSteps(project, content, live) {
     pushEntry(project, { type: 'script_link', script: content.scriptText });
     pushEntry(project, { type: 'suggestions', items: ['调整分镜顺序', '换一个背景音乐', '修改旁白音色', '重新生成第 3 个分镜'] });
     pushEntry(project, { type: 'status', text: '预览确认中，随时可以导出', active: false });
+    delete pipelineTimers[project.id]; // pipeline finished on its own — nothing left to ever cancel
   });
 }
 
@@ -559,6 +585,16 @@ var server = http.createServer(function (req, res) {
     proj5.updatedAt = new Date().toISOString();
     saveDb();
     return sendJson(res, 200, { ok: true, note: '演示模式：这里会触发录屏导出真实视频文件（后台未接入真实渲染）' });
+  }
+
+  // POST /api/projects/:id/cancel — stop a still-running generation
+  var m5 = pathname.match(/^\/api\/projects\/([^/]+)\/cancel$/);
+  if (m5 && m === 'POST') {
+    var proj6 = findProject(m5[1]);
+    if (!proj6) return sendJson(res, 404, { error: '项目不存在' });
+    var cancelled = cancelPipeline(proj6);
+    saveDb();
+    return sendJson(res, 200, { ok: true, cancelled: cancelled });
   }
 
   if (pathname.indexOf('/api/') === 0) return sendJson(res, 404, { error: 'not found' });

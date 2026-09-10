@@ -18,6 +18,7 @@
     isPlaying: false,
     playbackTimer: null,
     elapsedSeconds: 0,
+    playbackShotIndex: -1,
     totalDuration: 30,
     subtitlesOn: true,
     muted: false,
@@ -302,6 +303,7 @@
     stopPlaybackInterval();
     state.isPlaying = false;
     state.elapsedSeconds = 0;
+    state.playbackShotIndex = -1;
     document.getElementById('player-play-btn').style.opacity = '1';
     document.getElementById('player-play-btn').style.pointerEvents = 'auto';
     var mini = document.getElementById('mini-play-icon');
@@ -310,10 +312,38 @@
     document.getElementById('time-label').textContent = '00:00 / ' + formatTime(state.totalDuration);
   }
 
+  // Lightweight visual-only shot switch used while playback is running —
+  // unlike selectShot() this must NOT call renderFilmstrip() (a full DOM
+  // rebuild on every tick) or resetPlaybackProgress() (which would stop the
+  // very playback driving it).
+  function playbackSelectShot(i) {
+    var shot = state.shots[i];
+    if (!shot) return;
+    state.shots.forEach(function (s, idx) { s.active = idx === i; });
+    $all('.filmstrip-col').forEach(function (col, idx) { col.classList.toggle('is-active', idx === i); });
+    $all('.filmstrip-item').forEach(function (btn, idx) { btn.classList.toggle('is-active', idx === i); });
+    if (shot.status === 'ready') {
+      document.getElementById('player-scene').style.background =
+        'linear-gradient(165deg, oklch(80% 0.09 ' + shot.hue + '), oklch(58% 0.09 ' + (shot.hue + 20) + '))';
+    }
+    updateSubtitleUI(shot, i);
+    updateTitleOverlay(shot);
+  }
+
   function updatePlaybackUI() {
     var pct = state.totalDuration ? (state.elapsedSeconds / state.totalDuration * 100) : 0;
     document.getElementById('progress-fill').style.width = Math.min(100, pct) + '%';
     document.getElementById('time-label').textContent = formatTime(state.elapsedSeconds) + ' / ' + formatTime(state.totalDuration);
+    // Advance the displayed shot in step with playback — each shot gets an
+    // equal slice of the total runtime (matches shotDurationLabel()'s math).
+    if (state.shots.length) {
+      var per = state.totalDuration / state.shots.length;
+      var idx = Math.min(state.shots.length - 1, Math.floor(state.elapsedSeconds / per));
+      if (idx !== state.playbackShotIndex) {
+        state.playbackShotIndex = idx;
+        playbackSelectShot(idx);
+      }
+    }
   }
 
   function stopPlaybackInterval() {
@@ -321,7 +351,10 @@
   }
 
   function togglePlayback() {
-    if (!state.shots.length) { showToast('还没有可播放的内容，先在右侧输入提示词试试吧'); return; }
+    if (!state.shots.some(function (s) { return s.status === 'ready'; })) {
+      showToast('还没有可播放的内容，先在右侧输入提示词试试吧');
+      return;
+    }
     state.isPlaying = !state.isPlaying;
     var bigBtn = document.getElementById('player-play-btn');
     var mini = document.getElementById('mini-play-icon');
@@ -329,6 +362,7 @@
       bigBtn.style.opacity = '0';
       bigBtn.style.pointerEvents = 'none';
       if (mini) mini.outerHTML = pauseSvgSmall();
+      updatePlaybackUI(); // sync the displayed shot to the current position right away
       state.playbackTimer = setInterval(function () {
         state.elapsedSeconds += 0.5;
         if (state.elapsedSeconds >= state.totalDuration) {
@@ -546,6 +580,11 @@
   function setStatus(text, active) {
     document.getElementById('status-text').textContent = text;
     document.getElementById('status-dot').classList.toggle('is-active', !!active);
+    // "active" already means exactly "the pipeline is still generating" —
+    // reuse it to show/hide the cancel button instead of tracking that
+    // separately.
+    var cancelBtn = document.getElementById('btn-cancel-generation');
+    if (cancelBtn) cancelBtn.hidden = !active || !state.activeProjectId;
   }
 
   function updateDurationInfo(total) {
@@ -647,6 +686,7 @@
   }
 
   function deleteShot(i) {
+    if (!window.confirm('确定要删除这个分镜吗？此操作不可撤销。')) return;
     var wasActive = !!(state.shots[i] && state.shots[i].active);
     state.shots.splice(i, 1);
     if (wasActive && state.shots.length) state.shots[Math.min(i, state.shots.length - 1)].active = true;
@@ -1214,6 +1254,24 @@
     });
   }
 
+  function cancelGeneration() {
+    if (!state.activeProjectId) return;
+    if (backendAvailable === false) {
+      localClearTimers();
+      applyEntry({ type: 'ai_message', text: '已取消生成。你可以重新输入提示词开始一个新项目，或者继续和我说说想怎么调整。' });
+      applyEntry({ type: 'status', text: '已取消，等待新的指令', active: false });
+      showToast('已取消生成');
+      return;
+    }
+    api('/api/projects/' + state.activeProjectId + '/cancel', { method: 'POST' }).then(function (res) {
+      if (!res.ok) showToast('取消失败：' + (res.body.error || res.status));
+      // On success the server pushes its own ai_message/status entries over
+      // the existing SSE connection — nothing else to do here.
+    }).catch(function () {
+      showToast('无法连接后端服务，请确认 node video-agent/server.js 正在运行');
+    });
+  }
+
   // ---------- unified entry points (branch on backendAvailable) ----------
 
   function openProject(id) {
@@ -1279,7 +1337,7 @@
   function handleSend() {
     var input = document.getElementById('chat-input');
     var text = input.value.trim();
-    if (!text) return;
+    if (!text) { showToast('请先输入一句提示词吧'); input.focus(); return; }
     input.value = '';
     input.style.height = '';
 
@@ -1414,6 +1472,7 @@
 
     function runExport() {
       if (!state.activeProjectId) { showToast('还没有项目可以导出'); return; }
+      if (!isLoggedIn()) { showToast('请先登录后再导出成片'); openLoginModal(); return; }
       if (backendAvailable === false) {
         if (!state.doneSteps.has('preview')) { showToast('先完成分镜生成，再导出视频吧'); return; }
         showToast('🎬 演示模式：这里会触发录屏导出真实视频文件（当前是静态预览，未连接后台）');
@@ -1484,6 +1543,8 @@
       state.chatExpanded = !state.chatExpanded;
       document.querySelector('.chat-panel').classList.toggle('is-expanded', state.chatExpanded);
     });
+
+    document.getElementById('btn-cancel-generation').addEventListener('click', cancelGeneration);
 
     document.getElementById('btn-send').addEventListener('click', handleSend);
     document.getElementById('chat-input').addEventListener('keydown', function (e) {
