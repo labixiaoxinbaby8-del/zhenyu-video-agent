@@ -93,7 +93,18 @@ function cloneShots(shots) {
   // in place as generation progresses, so embedding the live array reference
   // would silently rewrite every past 'shots' timeline entry to the current
   // (eventually final) state.
-  return shots.map(function (s) { return { status: s.status, hue: s.hue }; });
+  return shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+}
+
+// Splits the prompt into rough clauses to stand in for per-shot narration
+// captions/subtitles — a real script-writing LLM would produce one narration
+// line per shot instead of this placeholder heuristic.
+function splitCaptions(prompt, shotCount) {
+  var parts = prompt.split(/[，。！？,.!?、~]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+  if (!parts.length) parts = [prompt];
+  var out = [];
+  for (var i = 0; i < shotCount; i++) out.push(parts[i % parts.length]);
+  return out;
 }
 
 function hueForText(text) {
@@ -109,8 +120,9 @@ function buildContent(prompt) {
   var shotCount = pickShotCount(prompt);
   var vb = pickVoiceBgm(prompt);
   var totalDuration = shotCount * 5;
+  var captions = splitCaptions(prompt, shotCount);
   var shots = [];
-  for (var i = 0; i < shotCount; i++) shots.push({ status: 'pending', hue: SHOT_HUES[i % SHOT_HUES.length] });
+  for (var i = 0; i < shotCount; i++) shots.push({ status: 'pending', hue: SHOT_HUES[i % SHOT_HUES.length], caption: captions[i] });
   return {
     shotCount: shotCount,
     totalDuration: totalDuration,
@@ -120,7 +132,8 @@ function buildContent(prompt) {
     scriptMeta: Math.max(60, prompt.length * 6) + ' 字 · 时长约 ' + totalDuration + ' 秒',
     outlineMeta: '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落',
     storyboardMeta: '每个大纲段落对应 1 个分镜',
-    completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
+    completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～',
+    summaryItems: ['脚本生成', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成', '旁白配音', '字幕生成', '背景音乐选择', '剪辑合成']
   };
 }
 
@@ -163,6 +176,13 @@ function runPipelineSteps(project, content, live) {
     else fn();
   }
 
+  at(150, function () {
+    // Marked kickoff:true so the 'ocean' seed's mid-pipeline freeze below
+    // (which stops replaying the timeline at the first ai_message) doesn't
+    // mistake this early acknowledgement for the completion message.
+    pushEntry(project, { type: 'ai_message', text: '收到！我会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认，请稍候～', kickoff: true });
+  });
+
   at(500, function () {
     project.doneSteps.push('script');
     project.currentStep = 'outline';
@@ -180,7 +200,7 @@ function runPipelineSteps(project, content, live) {
   });
 
   at(1600, function () {
-    project.shots = content.shots.map(function (s) { return { status: 'pending', hue: s.hue }; });
+    project.shots = content.shots.map(function (s) { return { status: 'pending', hue: s.hue, caption: s.caption }; });
     project.doneSteps.push('storyboard');
     project.currentStep = 'frames';
     pushEntry(project, { type: 'shots', shots: cloneShots(project.shots) });
@@ -219,23 +239,34 @@ function runPipelineSteps(project, content, live) {
     project.bgm = content.bgm;
     pushEntry(project, { type: 'process_card', id: 'voice', title: '分镜声音已生成', meta: '旁白：' + content.voice + ' · 配乐：' + content.bgm, done: true });
     pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+    pushEntry(project, { type: 'status', text: '生成字幕中…', active: true });
+  });
+
+  at(afterFrames + 1100, function () {
+    pushEntry(project, { type: 'process_card', id: 'subtitle', title: '字幕已生成', meta: '已根据配音文本生成 ' + shotCount + ' 条字幕，可随时开关或编辑', done: true });
     pushEntry(project, { type: 'status', text: '按配音时长回调画面时长…', active: true });
   });
 
-  at(afterFrames + 1300, function () {
+  at(afterFrames + 1600, function () {
     project.currentStep = 'preview';
     pushEntry(project, { type: 'process_card', id: 'sync', title: '已回调分镜画面时长', meta: '已按配音时长重新同步 ' + shotCount + ' 个分镜的展示时长', done: true });
     pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+    pushEntry(project, { type: 'status', text: '剪辑合成中…', active: true });
+  });
+
+  at(afterFrames + 2000, function () {
+    pushEntry(project, { type: 'process_card', id: 'editing', title: '剪辑合成已完成', meta: '画面、配音、字幕与背景音乐已合成为完整视频轨道', done: true });
     pushEntry(project, { type: 'status', text: '准备预览…', active: true });
   });
 
-  at(afterFrames + 1900, function () {
+  at(afterFrames + 2500, function () {
     project.doneSteps.push('preview');
     project.currentStep = 'export';
     project.status = 'ready';
     pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+    pushEntry(project, { type: 'summary_card', items: content.summaryItems });
     pushEntry(project, { type: 'ai_message', text: content.completionText });
-    pushEntry(project, { type: 'suggestions', items: ['重新生成第 3 个分镜', '换一个背景音乐', '语速再快一点'] });
+    pushEntry(project, { type: 'suggestions', items: ['调整分镜顺序', '换一个背景音乐', '修改旁白音色', '重新生成第 3 个分镜'] });
     pushEntry(project, { type: 'status', text: '预览确认中，随时可以导出', active: false });
   });
 }
@@ -330,14 +361,14 @@ function seedProjects() {
           if (framesReady >= readyTarget) break; // captured the frozen ready count; stop before the next shot starts
           continue;
         }
-        if (e.type === 'process_card_done' || (e.type === 'ai_message') || (e.type === 'suggestions')) break;
+        if (e.type === 'process_card_done' || (e.type === 'ai_message' && !e.kickoff) || (e.type === 'suggestions')) break;
         kept.push(e);
       }
       project.timeline = kept;
       project.doneSteps = ['script', 'outline', 'storyboard'];
       project.currentStep = 'frames';
       project.status = 'running';
-      project.shots = content.shots.map(function (s, i2) { return { status: i2 < readyTarget ? 'ready' : 'loading', hue: s.hue }; });
+      project.shots = content.shots.map(function (s, i2) { return { status: i2 < readyTarget ? 'ready' : 'loading', hue: s.hue, caption: s.caption }; });
       project.voice = DEFAULT_VOICE_BGM.voice;
       project.bgm = DEFAULT_VOICE_BGM.bgm;
       project.timeline.push({ type: 'ai_message', text: '已经为前 ' + readyTarget + ' 个分镜生成好画面啦，还剩 ' + remaining + ' 个在生成中，大概 20 秒，之后会接着生成配音和配乐。你可以先预览已完成的部分，如果不满意某个分镜的画风，直接告诉我要怎么改～', at: new Date().toISOString() });
@@ -432,6 +463,14 @@ var server = http.createServer(function (req, res) {
     return readJsonBody(req).then(function (body) {
       if (body.bgm) proj2.bgm = body.bgm;
       if (body.voice) proj2.voice = body.voice;
+      if (body.title) proj2.title = body.title.toString().trim().slice(0, 40) || proj2.title;
+      if (Array.isArray(body.shots)) {
+        // Client-driven edits (add/delete/reorder/re-caption a shot) — the
+        // client already applied the change locally and just asks us to
+        // persist the resulting list so a reload doesn't lose it.
+        proj2.shots = body.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+      }
+      if (typeof body.totalDuration === 'number') proj2.totalDuration = body.totalDuration;
       proj2.updatedAt = new Date().toISOString();
       saveDb();
       sendJson(res, 200, publicProject(proj2));
@@ -483,6 +522,13 @@ var server = http.createServer(function (req, res) {
         var next = candidates[(candidates.indexOf(proj4.bgm) + 1) % candidates.length];
         proj4.bgm = next;
         pushEntry(proj4, { type: 'ai_message', text: '已经换成「' + next + '」啦，感觉怎么样？' });
+      } else if (text.indexOf('音色') !== -1 || text.indexOf('旁白') !== -1) {
+        var voiceCandidates = ['知性女声', '活泼童声', '沉稳男声', '温柔姐姐音'];
+        var nextVoice = voiceCandidates[(voiceCandidates.indexOf(proj4.voice) + 1) % voiceCandidates.length];
+        proj4.voice = nextVoice;
+        pushEntry(proj4, { type: 'ai_message', text: '已经把旁白音色换成「' + nextVoice + '」啦。' });
+      } else if (text.indexOf('分镜顺序') !== -1) {
+        pushEntry(proj4, { type: 'ai_message', text: '已经调整了分镜顺序，你可以在下方分镜列表里查看最新排列。' });
       } else if (text.indexOf('语速') !== -1) {
         pushEntry(proj4, { type: 'ai_message', text: '好的，已经把旁白语速调快了一档。' });
       }

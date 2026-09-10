@@ -1,19 +1,6 @@
 (function () {
   'use strict';
 
-  // ---------- pipeline shape (client-only; must mirror server.js STEP_ORDER) ----------
-
-  var STEP_META = [
-    { key: 'script', label: '脚本', full: '生成脚本' },
-    { key: 'outline', label: '大纲', full: '生成大纲' },
-    { key: 'storyboard', label: '分镜', full: '拆分分镜' },
-    { key: 'frames', label: '画面', full: '生成分镜画面' },
-    { key: 'voice', label: '声音', full: '生成分镜声音' },
-    { key: 'preview', label: '预览', full: '预览 & 修改' },
-    { key: 'export', label: '导出', full: '录屏输出' }
-  ];
-  var LOOP_AFTER_INDEX = 3; // connector between 'frames' (index 3) and 'voice' (index 4)
-
   // ---------- state (the backend is the source of truth for a project's
   // generation state when reachable; this mirrors whatever is currently
   // loaded for rendering, plus pure client-side concerns like playback
@@ -32,8 +19,17 @@
     playbackTimer: null,
     elapsedSeconds: 0,
     totalDuration: 30,
-    subtitlesOn: true
+    subtitlesOn: true,
+    muted: false,
+    ratio: '16:9',
+    chatExpanded: false,
+    batchEdit: false
   };
+
+  var lastProjectList = []; // cached most-recent sidebar list, for client-side search filtering
+
+  var BGM_CANDIDATES = ['海风轻快民谣', '阳光电子流行', '温柔钢琴独奏', '探索感管弦乐'];
+  var VOICE_CANDIDATES = ['知性女声', '活泼童声', '沉稳男声', '温柔姐姐音'];
 
   var eventSource = null;
   // null = not yet checked; true = talking to a real node server.js;
@@ -61,14 +57,8 @@
   function checkSvgSmall() {
     return '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--surface)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>';
   }
-  function checkSvg() {
-    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--surface)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>';
-  }
   function clockSvg() {
     return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 6v6l4 2"></path></svg>';
-  }
-  function plusSvg() {
-    return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>';
   }
   function playSvgSmall() {
     return '<svg id="mini-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="oklch(100% 0 0)" style="cursor:pointer"><path d="M8 5v14l11-7z"></path></svg>';
@@ -76,13 +66,6 @@
   function pauseSvgSmall() {
     return '<svg id="mini-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="oklch(100% 0 0)" style="cursor:pointer"><rect x="6" y="5" width="4" height="14"></rect><rect x="14" y="5" width="4" height="14"></rect></svg>';
   }
-  function loopIconSvg() {
-    return '<svg class="loop-icon" viewBox="0 0 64 26" preserveAspectRatio="none" aria-hidden="true">' +
-      '<path d="M6 22 C 6 6, 58 6, 58 20" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"></path>' +
-      '<path d="M58 20 L 50 15 M58 20 L 51 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>' +
-      '</svg>';
-  }
-
   var toastTimer = null;
   function showToast(msg) {
     var el = document.getElementById('toast');
@@ -105,36 +88,34 @@
     });
   }
 
-  // ---------- stepper ----------
-
-  function renderStepper() {
-    var el = document.getElementById('stepper');
-    el.innerHTML = '';
-    STEP_META.forEach(function (step, i) {
-      var isDone = state.doneSteps.has(step.key);
-      var isCurrent = state.currentStep === step.key;
-      var div = document.createElement('div');
-      div.className = 'step' + (isDone ? ' is-done' : '') + (isCurrent ? ' is-current' : '');
-      div.title = step.full;
-      div.innerHTML =
-        '<div class="step-circle">' + (isDone ? checkSvg() : '<span>' + (i + 1) + '</span>') + '</div>' +
-        '<div class="step-label">' + step.label + '</div>';
-      el.appendChild(div);
-      if (i < STEP_META.length - 1) {
-        var conn = document.createElement('div');
-        conn.className = 'step-connector' + (i === LOOP_AFTER_INDEX ? ' step-connector--loop' : '');
-        if (i === LOOP_AFTER_INDEX) conn.innerHTML = loopIconSvg();
-        el.appendChild(conn);
-      }
-    });
-  }
-
   // ---------- filmstrip ----------
+
+  function shotDurationLabel() {
+    // Every shot occupies an equal slice of the total runtime in this demo
+    // pipeline (totalDuration = shotCount * 5s) — there's no per-shot timing
+    // data to draw a more precise label from.
+    var per = state.shots.length ? state.totalDuration / state.shots.length : 0;
+    return formatTime(per);
+  }
 
   function renderFilmstrip() {
     var el = document.getElementById('filmstrip');
     el.innerHTML = '';
+    var durationLabel = shotDurationLabel();
     state.shots.forEach(function (shot, i) {
+      var col = document.createElement('div');
+      col.className = 'filmstrip-col' + (shot.active ? ' is-active' : '') + (state.batchEdit ? ' is-batch' : '');
+      if (state.batchEdit) {
+        col.draggable = true;
+        col.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', String(i)); });
+        col.addEventListener('dragover', function (e) { e.preventDefault(); });
+        col.addEventListener('drop', function (e) {
+          e.preventDefault();
+          var from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+          if (!isNaN(from)) reorderShots(from, i);
+        });
+      }
+
       var btn = document.createElement('button');
       btn.type = 'button';
       var cls = 'filmstrip-item';
@@ -146,19 +127,64 @@
         btn.style.background = 'linear-gradient(160deg, oklch(84% 0.07 ' + shot.hue + '), oklch(70% 0.08 ' + (shot.hue + 10) + '))';
       }
       var inner = '<span class="filmstrip-item__num">' + String(i + 1).padStart(2, '0') + '</span>';
-      if (shot.status !== 'ready') inner += clockSvg();
+      if (shot.status === 'ready') inner += '<span class="filmstrip-item__duration">' + durationLabel + '</span>';
+      else inner += clockSvg();
       btn.innerHTML = inner;
       btn.addEventListener('click', function () { selectShot(i); });
-      el.appendChild(btn);
+      col.appendChild(btn);
+
+      if (state.batchEdit) {
+        var del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'filmstrip-item-delete';
+        del.setAttribute('aria-label', '删除分镜');
+        del.textContent = '×';
+        del.addEventListener('click', function (e) { e.stopPropagation(); deleteShot(i); });
+        btn.appendChild(del);
+      }
+
+      var label = document.createElement('span');
+      label.className = 'filmstrip-item-label';
+      label.textContent = shot.caption ? shot.caption : ('分镜 ' + (i + 1));
+      label.title = '点击编辑文案';
+      label.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (state.batchEdit) return;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'filmstrip-item-label-input';
+        input.value = shot.caption || '';
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+        var done = false;
+        function commit() {
+          if (done) return;
+          done = true;
+          commitShotCaption(shot, i, input.value);
+        }
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', function (e2) {
+          if (e2.key === 'Enter') { e2.preventDefault(); commit(); }
+          if (e2.key === 'Escape') { done = true; renderFilmstrip(); }
+        });
+      });
+      col.appendChild(label);
+
+      el.appendChild(col);
     });
-    var addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'filmstrip-add';
-    addBtn.innerHTML = plusSvg();
-    addBtn.setAttribute('aria-label', '新增分镜');
-    addBtn.addEventListener('click', function () { showToast('演示原型：这里会新增一个分镜'); });
-    el.appendChild(addBtn);
-    document.getElementById('filmstrip-label').textContent = '分镜 · ' + state.shots.length + ' 个';
+    document.getElementById('filmstrip-label').textContent = '分镜列表 · 共 ' + state.shots.length + ' 个分镜';
+  }
+
+  function updateTitleOverlay(shot) {
+    var overlay = document.getElementById('player-title-overlay');
+    if (!overlay) return;
+    // Slideshow frames double as title cards in this demo; HTML-video shots
+    // are meant to be full animated scenes, so no text overlay is drawn.
+    if (state.mode !== 'slideshow' || !shot || shot.status !== 'ready') { overlay.hidden = true; return; }
+    document.getElementById('player-title-main').textContent = state.projectTitle;
+    document.getElementById('player-title-sub').textContent = shot.caption || '';
+    overlay.hidden = false;
   }
 
   function selectShot(i) {
@@ -172,6 +198,7 @@
       if (msg) msg.hidden = true;
     }
     updateSubtitleUI(shot, i);
+    updateTitleOverlay(shot);
     resetPlaybackProgress();
   }
 
@@ -181,6 +208,7 @@
     var msg = scene.querySelector('.player-empty-msg');
     if (msg) msg.hidden = false;
     updateSubtitleUI(null, -1);
+    updateTitleOverlay(null);
     resetPlaybackProgress();
   }
 
@@ -194,13 +222,11 @@
     el.hidden = false;
   }
 
-  function toggleSubtitles() {
-    state.subtitlesOn = !state.subtitlesOn;
-    var btn = document.getElementById('btn-subtitle');
-    btn.classList.toggle('is-active', state.subtitlesOn);
-    btn.setAttribute('aria-pressed', String(state.subtitlesOn));
+  function toggleSubtitles(checked) {
+    state.subtitlesOn = checked;
     var activeIdx = state.shots.findIndex(function (s) { return s.active; });
     updateSubtitleUI(state.shots[activeIdx], activeIdx);
+    renderMetaRow();
     showToast(state.subtitlesOn ? '字幕已开启' : '字幕已关闭');
   }
 
@@ -271,6 +297,27 @@
     document.getElementById('backdrop').hidden = true;
   }
 
+  function toggleRatio() {
+    state.ratio = state.ratio === '16:9' ? '9:16' : '16:9';
+    var isPortrait = state.ratio === '9:16';
+    document.getElementById('player-wrap').classList.toggle('is-portrait', isPortrait);
+    document.getElementById('ratio-label').textContent = state.ratio;
+    document.getElementById('btn-ratio').classList.toggle('is-active', isPortrait);
+  }
+
+  function speakerSvg() {
+    return '<svg id="mute-icon-btn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(100% 0 0)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="cursor:pointer"><path d="M11 5 6 9H2v6h4l5 4z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path></svg>';
+  }
+  function mutedSpeakerSvg() {
+    return '<svg id="mute-icon-btn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(100% 0 0)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="cursor:pointer"><path d="M11 5 6 9H2v6h4l5 4z"></path><path d="M23 9l-6 6M17 9l6 6"></path></svg>';
+  }
+  function toggleMute() {
+    state.muted = !state.muted;
+    var el = document.getElementById('mute-icon-btn');
+    if (el) el.outerHTML = state.muted ? mutedSpeakerSvg() : speakerSvg();
+    showToast(state.muted ? '已静音（原型演示，暂无实际音频）' : '已取消静音');
+  }
+
   // ---------- chat log ----------
 
   function chatLogEl() { return document.getElementById('chat-log'); }
@@ -338,6 +385,20 @@
     if (bar) bar.remove();
   }
 
+  function addSummaryCard(items) {
+    var wrap = document.createElement('div');
+    wrap.className = 'msg msg-ai';
+    var bubble = document.createElement('div');
+    bubble.className = 'msg-bubble msg-bubble--summary';
+    var listHtml = items.map(function (text) {
+      return '<div class="summary-item"><span class="summary-item__icon">' + checkSvgSmall() + '</span><span>' + escapeHtml(text) + '</span></div>';
+    }).join('');
+    bubble.innerHTML = '<div class="summary-list">' + listHtml + '</div>';
+    wrap.appendChild(bubble);
+    chatLogEl().appendChild(wrap);
+    scrollChatToBottom();
+  }
+
   function showSuggestions(list) {
     var el = document.getElementById('suggestions');
     el.innerHTML = '';
@@ -363,19 +424,125 @@
     document.getElementById('status-dot').classList.toggle('is-active', !!active);
   }
 
-  function updateDurationInfo(total, done, totalShots) {
+  function updateDurationInfo(total) {
     state.totalDuration = total || 30;
-    document.getElementById('duration-info').textContent = '共 ' + total + ' 秒 · ' + done + '/' + totalShots + ' 分镜已生成';
+    renderMetaRow();
+  }
+
+  // ---------- meta row (read-only summary line under the filmstrip) ----------
+
+  function renderMetaRow() {
+    var el = document.getElementById('meta-row');
+    if (!el) return;
+    var parts = [
+      { label: '当前模式', value: state.mode === 'html' ? 'HTML 视频模式' : '图片轮播模式' },
+      { label: '字幕', value: state.subtitlesOn ? '已开启' : '已关闭' },
+      { label: '背景音乐', value: state.bgm, field: 'bgm' },
+      { label: '旁白', value: state.voice, field: 'voice' },
+      { label: '视频时长', value: formatTime(state.totalDuration) }
+    ];
+    el.innerHTML = parts.map(function (p, i) {
+      var sep = i ? '<span class="meta-row__sep">|</span>' : '';
+      var body = '<strong>' + escapeHtml(p.label) + '：</strong>' + escapeHtml(p.value);
+      var tag = p.field
+        ? '<button type="button" class="meta-row__item meta-row__item--editable" data-field="' + p.field + '" title="点击切换">' + body + '</button>'
+        : '<span class="meta-row__item">' + body + '</span>';
+      return sep + tag;
+    }).join('');
+  }
+
+  // ---------- direct edits (bgm/voice cycling, shot add/delete/reorder/caption) ----------
+
+  function persistShots() {
+    if (state.activeProjectId && backendAvailable !== false) {
+      var payload = {
+        shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; }),
+        totalDuration: state.totalDuration
+      };
+      api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: payload }).catch(function () {});
+    }
+  }
+
+  function recalcDuration() {
+    state.totalDuration = state.shots.length * 5;
+    renderMetaRow();
+  }
+
+  function cycleBgm() {
+    var next = BGM_CANDIDATES[(BGM_CANDIDATES.indexOf(state.bgm) + 1) % BGM_CANDIDATES.length];
+    state.bgm = next;
+    renderMetaRow();
+    if (state.activeProjectId && backendAvailable !== false) {
+      api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { bgm: next } }).catch(function () {});
+    }
+    showToast('背景音乐已切换为「' + next + '」');
+  }
+
+  function cycleVoice() {
+    var next = VOICE_CANDIDATES[(VOICE_CANDIDATES.indexOf(state.voice) + 1) % VOICE_CANDIDATES.length];
+    state.voice = next;
+    renderMetaRow();
+    if (state.activeProjectId && backendAvailable !== false) {
+      api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { voice: next } }).catch(function () {});
+    }
+    showToast('旁白音色已切换为「' + next + '」');
+  }
+
+  function addShot() {
+    if (!state.activeProjectId) { showToast('先在右侧输入提示词创建一个项目吧'); return; }
+    var hue = LOCAL_SHOT_HUES[state.shots.length % LOCAL_SHOT_HUES.length];
+    var shot = { status: 'loading', hue: hue, caption: '新分镜（点击可编辑文案）' };
+    state.shots.push(shot);
+    recalcDuration();
+    renderFilmstrip();
+    persistShots();
+    showToast('正在生成新分镜画面…');
+    setTimeout(function () {
+      shot.status = 'ready';
+      renderFilmstrip();
+      persistShots();
+      selectShot(state.shots.indexOf(shot));
+    }, 900);
+  }
+
+  function deleteShot(i) {
+    var wasActive = !!(state.shots[i] && state.shots[i].active);
+    state.shots.splice(i, 1);
+    if (wasActive && state.shots.length) state.shots[Math.min(i, state.shots.length - 1)].active = true;
+    recalcDuration();
+    renderFilmstrip();
+    persistShots();
+    var activeIdx = state.shots.findIndex(function (s) { return s.active; });
+    if (activeIdx !== -1) selectShot(activeIdx); else resetPlayerToEmpty();
+  }
+
+  function reorderShots(fromIndex, toIndex) {
+    if (fromIndex === toIndex) return;
+    var moved = state.shots.splice(fromIndex, 1)[0];
+    state.shots.splice(toIndex, 0, moved);
+    renderFilmstrip();
+    persistShots();
+  }
+
+  function toggleBatchEdit() {
+    state.batchEdit = !state.batchEdit;
+    document.getElementById('btn-batch-edit').classList.toggle('is-active', state.batchEdit);
+    renderFilmstrip();
+    showToast(state.batchEdit ? '批量编辑：拖动排序，点击 × 删除分镜' : '已退出批量编辑');
+  }
+
+  function commitShotCaption(shot, i, value) {
+    shot.caption = value.trim() || shot.caption;
+    renderFilmstrip();
+    persistShots();
+    if (shot.active) { updateSubtitleUI(shot, i); updateTitleOverlay(shot); }
   }
 
   // ---------- project title / mode UI ----------
 
-  function updateProjectTitleUI() { document.getElementById('project-title').textContent = state.projectTitle; }
-
-  function updateModeSwitchUI() {
-    $all('.mode-switch__btn').forEach(function (btn) {
-      btn.classList.toggle('is-active', btn.dataset.mode === state.mode);
-    });
+  function updateProjectTitleUI() {
+    document.getElementById('project-title').textContent = state.projectTitle;
+    renderMetaRow();
   }
 
   function highlightActiveSidebar(id) {
@@ -409,9 +576,14 @@
         markProcessCardDone(entry.id, entry.title, entry.meta);
         break;
       case 'stepper':
+        // No dedicated stepper UI — pipeline progress is communicated through
+        // the process cards in the chat log instead. doneSteps is still
+        // tracked (e.g. to gate export until 'preview' is reached).
         state.doneSteps = new Set(entry.doneSteps);
         state.currentStep = entry.currentStep;
-        renderStepper();
+        break;
+      case 'summary_card':
+        addSummaryCard(entry.items);
         break;
       case 'shots':
         state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
@@ -425,7 +597,12 @@
         setStatus(entry.text, entry.active);
         break;
       case 'duration':
-        updateDurationInfo(entry.total, entry.done, entry.totalShots);
+        updateDurationInfo(entry.total);
+        break;
+      case 'meta':
+        if (entry.bgm) state.bgm = entry.bgm;
+        if (entry.voice) state.voice = entry.voice;
+        renderMetaRow();
         break;
       case 'suggestions':
         showSuggestions(entry.items);
@@ -523,7 +700,8 @@
       scriptMeta: Math.max(60, prompt.length * 6) + ' 字 · 时长约 ' + totalDuration + ' 秒',
       outlineMeta: '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落',
       storyboardMeta: '每个大纲段落对应 1 个分镜',
-      completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
+      completionText: '已经为你生成好全部 ' + shotCount + ' 个分镜的画面和声音啦，画面时长也按配音重新对齐过了。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～',
+      summaryItems: ['脚本生成', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成', '旁白配音', '字幕生成', '背景音乐选择', '剪辑合成']
     };
   }
 
@@ -535,6 +713,10 @@
     var content = localBuildContent(prompt);
     var shotCount = content.shotCount;
     var doneSteps = [];
+
+    localAt(150, function () {
+      applyEntry({ type: 'ai_message', text: '收到！我会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认，请稍候～' });
+    }, live);
 
     localAt(500, function () {
       doneSteps.push('script');
@@ -585,26 +767,34 @@
 
     localAt(afterFrames + 700, function () {
       doneSteps.push('voice');
-      state.bgm = content.bgm;
-      state.voice = content.voice;
-      var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = content.bgm;
-      var voiceSel = document.getElementById('select-voice'); if (voiceSel) voiceSel.value = content.voice;
+      applyEntry({ type: 'meta', bgm: content.bgm, voice: content.voice });
       applyEntry({ type: 'process_card', id: 'voice', title: '分镜声音已生成', meta: '旁白：' + content.voice + ' · 配乐：' + content.bgm, done: true });
       applyEntry({ type: 'stepper', currentStep: 'voice', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '生成字幕中…', active: true });
+    }, live);
+
+    localAt(afterFrames + 1100, function () {
+      applyEntry({ type: 'process_card', id: 'subtitle', title: '字幕已生成', meta: '已根据配音文本生成 ' + shotCount + ' 条字幕，可随时开关或编辑', done: true });
       applyEntry({ type: 'status', text: '按配音时长回调画面时长…', active: true });
     }, live);
 
-    localAt(afterFrames + 1300, function () {
+    localAt(afterFrames + 1600, function () {
       applyEntry({ type: 'process_card', id: 'sync', title: '已回调分镜画面时长', meta: '已按配音时长重新同步 ' + shotCount + ' 个分镜的展示时长', done: true });
       applyEntry({ type: 'stepper', currentStep: 'preview', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'status', text: '剪辑合成中…', active: true });
+    }, live);
+
+    localAt(afterFrames + 2000, function () {
+      applyEntry({ type: 'process_card', id: 'editing', title: '剪辑合成已完成', meta: '画面、配音、字幕与背景音乐已合成为完整视频轨道', done: true });
       applyEntry({ type: 'status', text: '准备预览…', active: true });
     }, live);
 
-    localAt(afterFrames + 1900, function () {
+    localAt(afterFrames + 2500, function () {
       doneSteps.push('preview');
       applyEntry({ type: 'stepper', currentStep: 'export', doneSteps: doneSteps.slice() });
+      applyEntry({ type: 'summary_card', items: content.summaryItems });
       applyEntry({ type: 'ai_message', text: content.completionText });
-      applyEntry({ type: 'suggestions', items: ['重新生成第 3 个分镜', '换一个背景音乐', '语速再快一点'] });
+      applyEntry({ type: 'suggestions', items: ['调整分镜顺序', '换一个背景音乐', '修改旁白音色', '重新生成第 3 个分镜'] });
       applyEntry({ type: 'status', text: '预览确认中，随时可以导出', active: false });
     }, live);
   }
@@ -628,11 +818,15 @@
         }, 1100));
       }
     } else if (text.indexOf('背景音乐') !== -1) {
-      var candidates = ['海风轻快民谣', '阳光电子流行', '温柔钢琴独奏', '探索感管弦乐'];
-      var next = candidates[(candidates.indexOf(state.bgm) + 1) % candidates.length];
-      state.bgm = next;
-      var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = next;
+      var next = BGM_CANDIDATES[(BGM_CANDIDATES.indexOf(state.bgm) + 1) % BGM_CANDIDATES.length];
+      applyEntry({ type: 'meta', bgm: next });
       applyEntry({ type: 'ai_message', text: '已经换成「' + next + '」啦，感觉怎么样？' });
+    } else if (text.indexOf('音色') !== -1 || text.indexOf('旁白') !== -1) {
+      var nextVoice = VOICE_CANDIDATES[(VOICE_CANDIDATES.indexOf(state.voice) + 1) % VOICE_CANDIDATES.length];
+      applyEntry({ type: 'meta', voice: nextVoice });
+      applyEntry({ type: 'ai_message', text: '已经把旁白音色换成「' + nextVoice + '」啦。' });
+    } else if (text.indexOf('分镜顺序') !== -1) {
+      applyEntry({ type: 'ai_message', text: '已经调整了分镜顺序，你可以在下方分镜列表里查看最新排列。' });
     } else if (text.indexOf('语速') !== -1) {
       applyEntry({ type: 'ai_message', text: '好的，已经把旁白语速调快了一档。' });
     }
@@ -647,13 +841,11 @@
     state.projectTitle = seed.title;
     state.bgm = LOCAL_DEFAULT_VOICE_BGM.bgm;
     state.voice = LOCAL_DEFAULT_VOICE_BGM.voice;
-    updateModeSwitchUI();
     updateProjectTitleUI();
     highlightActiveSidebar(id);
     state.doneSteps = new Set();
     state.currentStep = null;
     state.shots = [];
-    renderStepper();
     renderFilmstrip();
     resetPlayerToEmpty();
     clearChatLogDom();
@@ -661,6 +853,7 @@
 
     var content = localBuildContent(seed.prompt);
     applyEntry({ type: 'user_message', text: seed.prompt });
+    applyEntry({ type: 'ai_message', text: '收到！我会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认，请稍候～' });
     applyEntry({ type: 'process_card', id: 'script', title: '脚本已生成', meta: content.scriptMeta, done: true });
     applyEntry({ type: 'process_card', id: 'outline', title: '大纲已生成', meta: content.outlineMeta, done: true });
 
@@ -675,29 +868,33 @@
       applyEntry({ type: 'status', text: '分镜画面生成中 (' + readyTarget + '/' + content.shotCount + ')', active: true });
       applyEntry({ type: 'duration', total: content.totalDuration, done: readyTarget, totalShots: content.shotCount });
       applyEntry({ type: 'ai_message', text: '已经为前 ' + readyTarget + ' 个分镜生成好画面啦，还剩 ' + remaining + ' 个在生成中，大概 20 秒，之后会接着生成配音和配乐。你可以先预览已完成的部分，如果不满意某个分镜的画风，直接告诉我要怎么改～' });
-      applyEntry({ type: 'suggestions', items: ['重新生成第 ' + content.shotCount + ' 个分镜', '换一个背景音乐', '语速再快一点'] });
+      applyEntry({ type: 'suggestions', items: ['重新生成第 ' + content.shotCount + ' 个分镜', '换一个背景音乐', '修改旁白音色'] });
     } else {
-      state.bgm = content.bgm;
-      state.voice = content.voice;
-      var bgmSel = document.getElementById('select-bgm'); if (bgmSel) bgmSel.value = content.bgm;
-      var voiceSel = document.getElementById('select-voice'); if (voiceSel) voiceSel.value = content.voice;
+      applyEntry({ type: 'meta', bgm: content.bgm, voice: content.voice });
       var shots2 = content.shots.map(function (s) { return { status: 'ready', hue: s.hue, caption: s.caption }; });
       applyEntry({ type: 'shots', shots: shots2 });
       applyEntry({ type: 'process_card', id: 'storyboard', title: '已拆分为 ' + content.shotCount + ' 个分镜', meta: '', done: true });
       applyEntry({ type: 'process_card', id: 'frames', title: '分镜画面已生成', meta: content.shotCount + ' 个分镜全部完成', done: true });
       applyEntry({ type: 'process_card', id: 'voice', title: '分镜声音已生成', meta: '旁白：' + content.voice + ' · 配乐：' + content.bgm, done: true });
+      applyEntry({ type: 'process_card', id: 'subtitle', title: '字幕已生成', meta: '已根据配音文本生成 ' + content.shotCount + ' 条字幕', done: true });
       applyEntry({ type: 'process_card', id: 'sync', title: '已回调分镜画面时长', meta: '已按配音时长重新同步展示时长', done: true });
+      applyEntry({ type: 'process_card', id: 'editing', title: '剪辑合成已完成', meta: '画面、配音、字幕与背景音乐已合成为完整视频轨道', done: true });
       applyEntry({ type: 'stepper', currentStep: null, doneSteps: ['script', 'outline', 'storyboard', 'frames', 'voice', 'preview', 'export'] });
+      applyEntry({ type: 'summary_card', items: content.summaryItems });
       applyEntry({ type: 'ai_message', text: seed.reply || content.completionText });
       applyEntry({ type: 'status', text: '创作完成', active: false });
       applyEntry({ type: 'duration', total: content.totalDuration, done: content.shotCount, totalShots: content.shotCount });
     }
   }
 
-  function buildLocalProjectList() {
+  function renderLocalProjectItems(seeds) {
     var listEl = document.getElementById('project-list');
     listEl.innerHTML = '';
-    LOCAL_SEEDS.forEach(function (seed) {
+    if (!seeds.length) {
+      listEl.innerHTML = '<p class="project-empty">没有找到匹配的项目</p>';
+      return;
+    }
+    seeds.forEach(function (seed) {
       var hue = localHueForText(seed.id);
       var btn = document.createElement('button');
       btn.type = 'button';
@@ -715,8 +912,10 @@
         location.hash = '#/workspace';
       });
       listEl.appendChild(btn);
+      if (seed.id === state.activeProjectId) btn.classList.add('is-active');
     });
   }
+  function buildLocalProjectList() { renderLocalProjectItems(LOCAL_SEEDS); }
 
   // =====================================================================
   // Real-backend path
@@ -725,6 +924,10 @@
   function renderSidebarFromList(list) {
     var listEl = document.getElementById('project-list');
     listEl.innerHTML = '';
+    if (!list.length) {
+      listEl.innerHTML = '<p class="project-empty">没有找到匹配的项目</p>';
+      return;
+    }
     list.forEach(function (proj) {
       var btn = document.createElement('button');
       btn.type = 'button';
@@ -748,8 +951,21 @@
 
   function refreshProjectList() {
     return api('/api/projects').then(function (res) {
-      if (res.ok) renderSidebarFromList(res.body);
+      if (res.ok) { lastProjectList = res.body; renderSidebarFromList(res.body); }
     });
+  }
+
+  // ---------- sidebar search (works against whichever source is active) ----------
+
+  function filterProjectList(query) {
+    var q = (query || '').trim().toLowerCase();
+    if (backendAvailable === false) {
+      var localMatches = !q ? LOCAL_SEEDS : LOCAL_SEEDS.filter(function (s) { return s.title.toLowerCase().indexOf(q) !== -1; });
+      renderLocalProjectItems(localMatches);
+    } else {
+      var matches = !q ? lastProjectList : lastProjectList.filter(function (p) { return p.title.toLowerCase().indexOf(q) !== -1; });
+      renderSidebarFromList(matches);
+    }
   }
 
   function loadProjectFromServer(id) {
@@ -762,17 +978,11 @@
       state.projectTitle = proj.title;
       state.bgm = proj.bgm;
       state.voice = proj.voice;
-      updateModeSwitchUI();
       updateProjectTitleUI();
       highlightActiveSidebar(id);
-      var bgmSel = document.getElementById('select-bgm');
-      var voiceSel = document.getElementById('select-voice');
-      if (bgmSel) bgmSel.value = proj.bgm;
-      if (voiceSel) voiceSel.value = proj.voice;
       state.doneSteps = new Set();
       state.currentStep = null;
       state.shots = [];
-      renderStepper();
       renderFilmstrip();
       resetPlayerToEmpty();
       clearChatLogDom();
@@ -808,17 +1018,15 @@
     state.doneSteps = new Set();
     state.currentStep = null;
     state.shots = [];
-    updateModeSwitchUI();
     updateProjectTitleUI();
     highlightActiveSidebar(null);
-    renderStepper();
     renderFilmstrip();
     resetPlayerToEmpty();
     clearChatLogDom();
     var empty = document.createElement('p');
     empty.id = 'chat-empty';
     empty.className = 'chat-empty';
-    empty.textContent = '在下方输入你想拍的视频内容，比如："帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐"。发送后，AI 会严格按照"脚本→大纲→分镜→画面→声音→预览&修改→导出"的顺序，在这里逐步展示生成过程。';
+    empty.textContent = '输入一句创作提示词，也可以直接粘贴一段知识主题或长文档。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。';
     chatLogEl().appendChild(empty);
     var sug = document.getElementById('suggestions');
     sug.hidden = true; sug.innerHTML = '';
@@ -826,6 +1034,7 @@
     updateDurationInfo(0, 0, 0);
     var input = document.getElementById('chat-input');
     input.value = '';
+    input.style.height = '';
     input.focus();
   }
 
@@ -834,6 +1043,7 @@
     var text = input.value.trim();
     if (!text) return;
     input.value = '';
+    input.style.height = '';
 
     if (state.activeProjectId) {
       addUserMessage(text);
@@ -860,8 +1070,18 @@
       if (!res.ok) { showToast('创建项目失败：' + (res.body.error || res.status)); setStatus('创建失败', false); return; }
       var proj = res.body;
       state.activeProjectId = proj.id;
-      subscribeToProject(proj.id);
       refreshProjectList();
+      // The server already started the pipeline synchronously (its first
+      // step fires ~150ms later), and opening the SSE connection below takes
+      // its own round trip — easily enough for that first step or two to
+      // fire before we're subscribed. Fetch the current snapshot and catch
+      // up on whatever already happened (skipping the user_message we
+      // already rendered optimistically above) before subscribing, so the
+      // pipeline never appears to silently skip its first couple of steps.
+      api('/api/projects/' + proj.id).then(function (snap) {
+        if (snap.ok) snap.body.timeline.slice(1).forEach(applyEntry);
+        subscribeToProject(proj.id);
+      }).catch(function () { subscribeToProject(proj.id); });
     }).catch(function () {
       showToast('无法连接后端服务（' + location.origin + '），请确认 node video-agent/server.js 正在运行');
       setStatus('创建失败', false);
@@ -889,20 +1109,13 @@
     document.getElementById('btn-back').addEventListener('click', function () { location.hash = ''; });
     document.getElementById('btn-new-project').addEventListener('click', function () { startNewProject(state.mode); });
 
-    $all('.mode-switch__btn').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        if (btn.dataset.mode === state.mode) return;
-        startNewProject(btn.dataset.mode);
-      });
-    });
-
     document.getElementById('player-play-btn').addEventListener('click', togglePlayback);
     document.addEventListener('click', function (e) {
       if (e.target && e.target.id === 'mini-play-icon') togglePlayback();
       if (e.target && (e.target.id === 'fullscreen-icon-btn' || (e.target.closest && e.target.closest('#fullscreen-icon-btn')))) enterFullscreen();
+      if (e.target && (e.target.id === 'mute-icon-btn' || (e.target.closest && e.target.closest('#mute-icon-btn')))) toggleMute();
     });
 
-    document.getElementById('btn-preview').addEventListener('click', enterFullscreen);
     document.getElementById('btn-fullscreen-toolbar').addEventListener('click', enterFullscreen);
     document.getElementById('player-close-btn').addEventListener('click', exitFullscreen);
     document.getElementById('backdrop').addEventListener('click', exitFullscreen);
@@ -910,7 +1123,9 @@
       if (e.key === 'Escape') exitFullscreen();
     });
 
-    document.getElementById('btn-subtitle').addEventListener('click', toggleSubtitles);
+    document.getElementById('chk-subtitle').addEventListener('change', function (e) { toggleSubtitles(e.target.checked); });
+
+    document.getElementById('btn-ratio').addEventListener('click', toggleRatio);
 
     function runExport() {
       if (!state.activeProjectId) { showToast('还没有项目可以导出'); return; }
@@ -928,24 +1143,72 @@
     document.getElementById('btn-export').addEventListener('click', runExport);
     document.getElementById('btn-record-export').addEventListener('click', runExport);
 
+    document.getElementById('btn-add-shot').addEventListener('click', addShot);
+    document.getElementById('btn-batch-edit').addEventListener('click', toggleBatchEdit);
+    document.getElementById('meta-row').addEventListener('click', function (e) {
+      var target = e.target.closest('[data-field]');
+      if (!target) return;
+      if (target.dataset.field === 'bgm') cycleBgm();
+      else if (target.dataset.field === 'voice') cycleVoice();
+    });
+
     $all('[data-toast]').forEach(function (el) {
       el.addEventListener('click', function () { showToast(el.dataset.toast); });
     });
 
-    document.getElementById('select-bgm').addEventListener('change', function (e) {
-      state.bgm = e.target.value;
-      if (state.activeProjectId && backendAvailable !== false) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { bgm: e.target.value } }).catch(function () {});
-      showToast('背景音乐已切换为「' + state.bgm + '」');
+    // ---- breadcrumb project rename ----
+    document.getElementById('btn-rename').addEventListener('click', function () {
+      var display = document.getElementById('project-title');
+      var input = document.getElementById('project-title-input');
+      input.value = state.projectTitle;
+      display.hidden = true;
+      input.hidden = false;
+      input.focus();
+      input.select();
     });
-    document.getElementById('select-voice').addEventListener('change', function (e) {
-      state.voice = e.target.value;
-      if (state.activeProjectId && backendAvailable !== false) api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { voice: e.target.value } }).catch(function () {});
-      showToast('旁白语音已切换为「' + state.voice + '」');
+    function commitRename() {
+      var display = document.getElementById('project-title');
+      var input = document.getElementById('project-title-input');
+      var next = input.value.trim();
+      if (next) {
+        state.projectTitle = next;
+        updateProjectTitleUI();
+        if (state.activeProjectId && backendAvailable !== false) {
+          api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: { title: next } }).catch(function () {});
+        }
+      }
+      display.hidden = false;
+      input.hidden = true;
+    }
+    document.getElementById('project-title-input').addEventListener('blur', commitRename);
+    document.getElementById('project-title-input').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+      if (e.key === 'Escape') { document.getElementById('project-title').hidden = false; e.target.hidden = true; }
+    });
+
+    // ---- sidebar search ----
+    document.getElementById('project-search').addEventListener('input', function (e) {
+      filterProjectList(e.target.value);
+    });
+
+    // ---- chat header actions ----
+    document.getElementById('btn-chat-reset').addEventListener('click', function () {
+      startNewProject(state.mode);
+    });
+    document.getElementById('btn-chat-expand').addEventListener('click', function () {
+      state.chatExpanded = !state.chatExpanded;
+      document.querySelector('.chat-panel').classList.toggle('is-expanded', state.chatExpanded);
     });
 
     document.getElementById('btn-send').addEventListener('click', handleSend);
     document.getElementById('chat-input').addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+    });
+    // Auto-grow so pasting a whole knowledge document doesn't hide most of
+    // it behind a single-line box; caps out and scrolls past ~8 lines.
+    document.getElementById('chat-input').addEventListener('input', function (e) {
+      e.target.style.height = 'auto';
+      e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
     });
 
     window.addEventListener('hashchange', render);
@@ -953,12 +1216,13 @@
 
   function boot() {
     attachStaticHandlers();
-    renderStepper();
     renderFilmstrip();
+    renderMetaRow();
 
     api('/api/projects').then(function (res) {
       if (!res.ok) throw new Error('backend responded but not ok');
       backendAvailable = true;
+      lastProjectList = res.body;
       renderSidebarFromList(res.body);
       if (location.hash === '#/workspace') openProject('ocean');
     }).catch(function () {

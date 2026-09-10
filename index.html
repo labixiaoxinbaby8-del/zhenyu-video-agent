@@ -92,18 +92,27 @@
         <rect x="1" y="1" width="28" height="28" rx="8" fill="var(--text)"></rect>
         <path d="M11 9 L21 15 L11 21 Z" fill="var(--bg)"></path>
       </svg>
-      <span id="project-title" class="project-title">未命名项目</span>
-      <div class="mode-switch" role="group" aria-label="创作模式">
-        <button type="button" class="mode-switch__btn" data-mode="slideshow">图片轮播</button>
-        <button type="button" class="mode-switch__btn" data-mode="html">HTML 视频</button>
-      </div>
+      <span class="brand-name-sm">帧语</span>
+      <nav class="breadcrumb" aria-label="面包屑导航">
+        <span class="breadcrumb-item">创作空间</span>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-item">我的项目</span>
+        <span class="breadcrumb-sep">/</span>
+        <span id="project-title" class="breadcrumb-item breadcrumb-item--current">未命名项目</span>
+        <input type="text" id="project-title-input" class="breadcrumb-title-input" hidden>
+        <button type="button" id="btn-rename" class="icon-btn icon-btn--tiny" aria-label="重命名项目">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+        </button>
+      </nav>
     </div>
     <div class="topbar-actions">
-      <button type="button" class="btn btn-ghost" data-toast="分享链接已复制（原型演示）">分享</button>
-      <button type="button" id="btn-preview" class="btn btn-outline">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"></path></svg>
-        预览
+      <button type="button" class="icon-btn" aria-label="操作记录" data-toast="操作记录（原型演示）">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
       </button>
+      <button type="button" class="icon-btn" aria-label="设置" data-toast="设置（原型演示）">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.65a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.35 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04Z"></path></svg>
+      </button>
+      <span class="user-avatar" title="labixiaoxinbaby8@gmail.com">帧</span>
       <button type="button" id="btn-export" class="btn btn-primary">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
         导出视频
@@ -115,25 +124,35 @@
 
     <!-- Left: history sidebar -->
     <aside class="sidebar">
-      <button type="button" id="btn-new-project" class="sidebar-new-btn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
-        新建项目
-      </button>
-      <span class="sidebar-label">历史项目</span>
+      <div class="sidebar-top-row">
+        <span class="sidebar-label">历史项目</span>
+        <button type="button" id="btn-new-project" class="sidebar-new-btn-sm">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+          新建项目
+        </button>
+      </div>
+      <label class="sidebar-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+        <input type="text" id="project-search" placeholder="搜索项目">
+      </label>
       <div id="project-list" class="project-list"><!-- rendered by app.js --></div>
     </aside>
 
     <!-- Center: preview -->
     <main class="center">
 
-      <div id="stepper" class="stepper"><!-- rendered by app.js --></div>
-
       <div class="preview-toolbar">
-        <span class="preview-toolbar__title">画面预览</span>
         <div class="spacer"></div>
-        <button type="button" id="btn-subtitle" class="toolbar-btn is-active" aria-pressed="true" aria-label="字幕开关">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2.5"></rect><path d="M7 14h3M12 14h5M7 10.5h10"></path></svg>
-          字幕
+        <label class="switch-chip">
+          <span class="switch-chip__label">字幕</span>
+          <span class="switch">
+            <input type="checkbox" id="chk-subtitle" checked>
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </span>
+        </label>
+        <button type="button" id="btn-ratio" class="toolbar-btn" aria-label="画面比例">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"></rect></svg>
+          <span id="ratio-label">16:9</span>
         </button>
         <button type="button" id="btn-fullscreen-toolbar" class="toolbar-btn" aria-label="全屏">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M21 16v3a2 2 0 0 1-2 2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
@@ -152,6 +171,10 @@
             <path d="M0 40 Q 15 30 30 40 T 60 40 T 100 40 V56 H0 Z" fill="oklch(50% 0.09 245)" opacity="0.55"></path>
             <path d="M0 46 Q 18 38 36 46 T 72 46 T 100 46 V56 H0 Z" fill="oklch(45% 0.08 245)" opacity="0.7"></path>
           </svg>
+          <div id="player-title-overlay" class="player-title-overlay" hidden>
+            <span id="player-title-main" class="player-title-main"></span>
+            <span id="player-title-sub" class="player-title-sub"></span>
+          </div>
           <p class="player-empty-msg">在右侧输入提示词，AI 生成的画面会显示在这里</p>
         </div>
         <p id="player-subtitle" class="player-subtitle" hidden></p>
@@ -165,47 +188,47 @@
           <svg id="mini-play-icon" width="16" height="16" viewBox="0 0 24 24" fill="oklch(100% 0 0)" style="cursor:pointer"><path d="M8 5v14l11-7z"></path></svg>
           <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
           <span id="time-label" class="time-label">00:00 / 00:30</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(100% 0 0)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path></svg>
+          <svg id="mute-icon-btn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(100% 0 0)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="cursor:pointer"><path d="M11 5 6 9H2v6h4l5 4z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(100% 0 0)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="cursor:pointer" data-toast="播放设置（原型演示）"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.65a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.35 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04Z"></path></svg>
           <svg id="fullscreen-icon-btn" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="oklch(100% 0 0)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="cursor:pointer"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M21 16v3a2 2 0 0 1-2 2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
         </div>
       </div>
 
       <div class="filmstrip-block">
-        <span id="filmstrip-label" class="filmstrip-label">分镜 · 0 个</span>
+        <div class="filmstrip-header">
+          <span id="filmstrip-label" class="filmstrip-label">分镜列表 · 共 0 个分镜</span>
+          <div class="filmstrip-header-actions">
+            <button type="button" id="btn-add-shot" class="ghost-btn-sm">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+              添加分镜
+            </button>
+            <button type="button" id="btn-batch-edit" class="ghost-btn-sm"
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"></path><path d="M3 6h.01M3 12h.01M3 18h.01"></path></svg>
+              批量编辑
+            </button>
+          </div>
+        </div>
         <div id="filmstrip" class="filmstrip-row"><!-- rendered by app.js --></div>
       </div>
 
-      <div class="toolbar-row">
-        <label class="chip chip--select">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-          <span class="chip__prefix">背景音乐</span>
-          <select id="select-bgm" class="chip__select">
-            <option>海风轻快民谣</option>
-            <option>阳光电子流行</option>
-            <option>温柔钢琴独奏</option>
-            <option>探索感管弦乐</option>
-          </select>
-        </label>
-        <label class="chip chip--select">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10a7 7 0 0 0 14 0"></path><path d="M12 17v4"></path></svg>
-          <span class="chip__prefix">旁白语音</span>
-          <select id="select-voice" class="chip__select">
-            <option>知性女声</option>
-            <option>活泼童声</option>
-            <option>沉稳男声</option>
-            <option>温柔姐姐音</option>
-          </select>
-        </label>
-        <div class="spacer"></div>
-        <span id="duration-info" class="duration-info">共 30 秒 · 0/0 分镜已生成</span>
-      </div>
+      <div id="meta-row" class="meta-row"><!-- rendered by app.js --></div>
 
     </main>
 
     <!-- Right: AI interaction -->
     <aside class="chat-panel">
       <div class="chat-header">
-        <span class="chat-header__title">AI 创作助手</span>
+        <div class="chat-header-top">
+          <span class="chat-header__title">AI 助手</span>
+          <div class="chat-header-actions">
+            <button type="button" id="btn-chat-reset" class="icon-btn icon-btn--tiny" aria-label="重新开始">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.6-6.3"></path><path d="M3 4v5h5"></path></svg>
+            </button>
+            <button type="button" id="btn-chat-expand" class="icon-btn icon-btn--tiny" aria-label="展开面板">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M9 21H3v-6"></path><path d="M21 3l-7 7"></path><path d="M3 21l7-7"></path></svg>
+            </button>
+          </div>
+        </div>
         <div class="chat-status">
           <span id="status-dot" class="status-dot"></span>
           <span id="status-text" class="status-text">等待你的创意提示词</span>
@@ -213,13 +236,13 @@
       </div>
 
       <div id="chat-log" class="chat-log">
-        <p id="chat-empty" class="chat-empty">在下方输入你想拍的视频内容，比如：“帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐”。发送后，AI 会严格按照“脚本→大纲→分镜→画面→声音→预览&amp;修改→导出”的顺序，在这里逐步展示生成过程。</p>
+        <p id="chat-empty" class="chat-empty">输入一句创作提示词，也可以直接粘贴一段知识主题或长文档，比如一篇科普文章、产品资料。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。</p>
       </div>
 
       <div id="suggestions" class="suggestions" hidden></div>
 
       <div class="chat-input-row">
-        <textarea id="chat-input" class="chat-input" rows="1" placeholder="告诉 AI 你想拍什么…"></textarea>
+        <textarea id="chat-input" class="chat-input" rows="1" placeholder="粘贴知识主题/文档，或输入创作提示词…"></textarea>
         <button type="button" id="btn-send" class="send-btn" aria-label="发送">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="M5 12l7-7 7 7"></path></svg>
         </button>
