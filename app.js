@@ -44,6 +44,17 @@
 
   function $all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
 
+  function modeLabel(mode) {
+    return mode === 'html' ? 'HTML 视频' : '图片轮播';
+  }
+
+  // Shown at the top of a fresh project's chat log so the mode you just
+  // picked is explained in place, not just back on the home page cards.
+  function modeIntro(mode) {
+    if (mode === 'html') return 'HTML 视频模式：AI 为每个分镜生成可动的网页动画，多段动画拼接成片。';
+    return '图片轮播模式：AI 为每个分镜调用文生图模型生成静态画面，多张图片按节奏轮播剪辑成片。';
+  }
+
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -496,7 +507,7 @@
     var el = document.getElementById('meta-row');
     if (!el) return;
     var parts = [
-      { label: '当前模式', value: state.mode === 'html' ? 'HTML 视频模式' : '图片轮播模式' },
+      { label: '当前模式', value: modeLabel(state.mode) + '模式' },
       { label: '字幕', value: state.subtitlesOn ? '已开启' : '已关闭' },
       { label: '背景音乐', value: state.bgm, field: 'bgm' },
       { label: '旁白', value: state.voice, field: 'voice' },
@@ -1047,7 +1058,7 @@
       var row = buildProjectRow({
         id: seed.id,
         title: seed.title,
-        metaText: (seed.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(seed.meta),
+        metaText: modeLabel(seed.mode) + ' · ' + escapeHtml(seed.meta),
         thumbHue: localHueForText(seed.id),
         isLocal: true,
         onOpen: function () { loadLocalProject(seed.id); location.hash = '#/workspace'; }
@@ -1072,7 +1083,7 @@
       var row = buildProjectRow({
         id: proj.id,
         title: proj.title,
-        metaText: (proj.mode === 'slideshow' ? '图片轮播' : 'HTML 视频') + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta),
+        metaText: modeLabel(proj.mode) + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta),
         thumbHue: proj.thumbHue,
         isLocal: false,
         onOpen: function () { loadProjectFromServer(proj.id); location.hash = '#/workspace'; }
@@ -1155,10 +1166,11 @@
     renderFilmstrip();
     resetPlayerToEmpty();
     clearChatLogDom();
-    var empty = document.createElement('p');
+    var empty = document.createElement('div');
     empty.id = 'chat-empty';
     empty.className = 'chat-empty';
-    empty.textContent = '输入一句创作提示词，也可以直接粘贴一段知识主题或长文档。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。';
+    empty.innerHTML = '<strong>' + escapeHtml(modeIntro(state.mode)) + '</strong><br><br>' +
+      '输入一句创作提示词，也可以直接粘贴一段知识主题或长文档。发送后 AI 会自动完成脚本、分镜、画面、配音、字幕、剪辑并导出成片，全程无需你确认；过程会在这里逐步展示，生成后如需微调，随时在这里继续说就行。';
     chatLogEl().appendChild(empty);
     var sug = document.getElementById('suggestions');
     sug.hidden = true; sug.innerHTML = '';
