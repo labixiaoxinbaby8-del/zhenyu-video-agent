@@ -25,7 +25,8 @@
     ratio: '16:9',
     chatExpanded: false,
     batchEdit: false,
-    scriptText: ''
+    scriptText: '',
+    exporting: false
   };
 
   var lastProjectList = []; // cached most-recent sidebar list, for client-side search filtering
@@ -621,14 +622,238 @@
   function updateToolbarDisabledState() {
     var hasProject = !!state.activeProjectId;
     var hasShots = state.shots.length > 0;
-    ['btn-ratio', 'btn-fullscreen-toolbar', 'btn-record-export', 'btn-export'].forEach(function (id) {
+    ['btn-ratio', 'btn-fullscreen-toolbar'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.disabled = !hasProject;
+    });
+    ['btn-record-export', 'btn-export'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.disabled = !hasProject || state.exporting;
     });
     ['btn-add-shot', 'btn-batch-edit'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.disabled = !hasShots;
     });
+  }
+
+  // ---------- real client-side export: canvas + MediaRecorder ----------
+  //
+  // Recreates each ready shot's on-screen look (gradient background, the
+  // slideshow title card, the subtitle bar) on an offscreen canvas, captures
+  // that canvas as a MediaStream, and records it in real time into a
+  // downloadable .webm — so "export" produces an actual file that matches
+  // the preview, rather than a toast. Silent: there's no real narration/BGM
+  // audio anywhere in this demo to mix in, only text labels for them.
+
+  function exportCanvasSize() {
+    return state.ratio === '9:16' ? { w: 720, h: 1280 } : { w: 1280, h: 720 };
+  }
+
+  function drawRoundedRect(ctx, x, y, w, h, r) {
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); return; }
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function truncateToFit(ctx, text, maxWidth) {
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    var out = text;
+    while (out.length > 1 && ctx.measureText(out + '…').width > maxWidth) out = out.slice(0, -1);
+    return out + '…';
+  }
+
+  function drawExportFrame(ctx, w, h, shot, index, snap) {
+    ctx.clearRect(0, 0, w, h);
+    var hue = shot ? shot.hue : 220;
+    var grad = ctx.createLinearGradient(0, 0, w * 0.3, h);
+    try {
+      grad.addColorStop(0, 'oklch(80% 0.09 ' + hue + ')');
+      grad.addColorStop(1, 'oklch(58% 0.09 ' + (hue + 20) + ')');
+    } catch (e) {
+      grad.addColorStop(0, '#7fb3d9'); grad.addColorStop(1, '#3d6b96'); // fallback if oklch() isn't parseable here
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = 'oklch(96% 0.05 90)';
+    ctx.beginPath();
+    ctx.arc(w * 0.82, h * 0.16, w * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    if (snap.mode === 'slideshow' && shot) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.35)';
+      ctx.shadowBlur = w * 0.015;
+      ctx.font = '700 ' + Math.round(w * 0.042) + 'px "Lexend", "Segoe UI", sans-serif';
+      ctx.fillText(truncateToFit(ctx, snap.projectTitle || '未命名项目', w * 0.82), w / 2, h * 0.44);
+      if (shot.caption) {
+        ctx.font = '500 ' + Math.round(w * 0.017) + 'px "Public Sans", "Segoe UI", sans-serif';
+        ctx.globalAlpha = 0.85;
+        ctx.fillText(truncateToFit(ctx, shot.caption, w * 0.7), w / 2, h * 0.44 + w * 0.05);
+        ctx.globalAlpha = 1;
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    if (snap.subtitlesOn && shot && shot.caption) {
+      var fontSize = Math.round(w * 0.016);
+      ctx.font = '500 ' + fontSize + 'px "Public Sans", "Segoe UI", sans-serif';
+      var text = truncateToFit(ctx, shot.caption, w * 0.8);
+      var textW = ctx.measureText(text).width;
+      var padX = w * 0.014, padY = fontSize * 0.6;
+      var boxW = textW + padX * 2;
+      var boxH = fontSize + padY * 2;
+      var boxX = (w - boxW) / 2;
+      var boxY = h - h * 0.12 - boxH;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      drawRoundedRect(ctx, boxX, boxY, boxW, boxH, boxH / 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(text, w / 2, boxY + boxH / 2 + fontSize * 0.35);
+    }
+
+    ctx.font = '600 ' + Math.round(w * 0.013) + 'px "Public Sans", "Segoe UI", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.textAlign = 'right';
+    ctx.fillText((index + 1) + ' / ' + snap.totalShots, w - w * 0.02, h - h * 0.03);
+  }
+
+  // Saves a file two different ways depending on where this page is
+  // running: a published Artifact has no direct filesystem/download access
+  // (window.claude.use('downloads') mediates a real save there), while the
+  // actual app (node server.js, opened as a normal page) has no
+  // `window.claude` at all and just uses a plain <a download> blob link.
+  function saveExportedFile(filename, blob) {
+    if (window.claude && typeof window.claude.use === 'function') {
+      return window.claude.use('downloads').then(function (downloads) {
+        if (!downloads) return saveViaAnchor(filename, blob);
+        return downloads.save({ filename: filename, data: blob }).then(function () {
+          return true;
+        }).catch(function (err) {
+          if (err && err.code === 'declined') return false;
+          return saveViaAnchor(filename, blob);
+        });
+      });
+    }
+    return Promise.resolve(saveViaAnchor(filename, blob));
+  }
+
+  function saveViaAnchor(filename, blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    return true;
+  }
+
+  function setExportBusyLabel(text) {
+    var exportSpan = document.querySelector('#btn-export .btn-label');
+    var recordSpan = document.querySelector('#btn-record-export .btn-label');
+    if (exportSpan) exportSpan.textContent = text || '导出视频';
+    if (recordSpan) recordSpan.textContent = text || '录屏导出';
+  }
+
+  function startCanvasExport() {
+    if (state.exporting) { showToast('正在录制中，请稍候…'); return; }
+    if (!state.shots.some(function (s) { return s.status === 'ready'; })) { showToast('还没有可导出的分镜'); return; }
+    if (typeof MediaRecorder === 'undefined' || !document.createElement('canvas').captureStream) {
+      showToast('当前浏览器不支持录制导出，换个较新的桌面 Chrome/Edge 试试吧');
+      return;
+    }
+
+    // Snapshot everything the recording needs up front — it runs in real
+    // time (matches the video's own length) via requestAnimationFrame, so
+    // it must not keep reading live state.* that the user could change
+    // (switch projects, edit captions, toggle subtitles) mid-recording.
+    var snap = {
+      shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; }),
+      mode: state.mode,
+      projectTitle: state.projectTitle,
+      subtitlesOn: state.subtitlesOn,
+      totalDuration: state.totalDuration,
+      totalShots: state.shots.length
+    };
+
+    var size = exportCanvasSize();
+    var canvas = document.createElement('canvas');
+    canvas.width = size.w;
+    canvas.height = size.h;
+    var ctx = canvas.getContext('2d');
+    var perShot = snap.totalDuration / snap.shots.length;
+    var totalMs = Math.max(1000, snap.totalDuration * 1000);
+
+    var mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].filter(function (t) {
+      return window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported(t);
+    })[0] || '';
+
+    var stream = canvas.captureStream(30);
+    var recorder;
+    try {
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType } : undefined);
+    } catch (e) {
+      showToast('录制初始化失败：' + e.message);
+      return;
+    }
+    var chunks = [];
+    recorder.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+
+    state.exporting = true;
+    updateToolbarDisabledState();
+    showToast('开始录制导出，请保持这个标签页在前台，别切走…');
+
+    var startTime = performance.now();
+    var tickTimer = setInterval(function () {
+      var elapsed = Math.min(snap.totalDuration, (performance.now() - startTime) / 1000);
+      setExportBusyLabel('录制中 ' + Math.round(elapsed) + '/' + Math.round(snap.totalDuration) + 's');
+    }, 250);
+
+    function frameLoop() {
+      var elapsed = (performance.now() - startTime) / 1000;
+      var clamped = Math.min(snap.totalDuration, elapsed);
+      var idx = Math.min(snap.shots.length - 1, Math.floor(clamped / perShot));
+      drawExportFrame(ctx, size.w, size.h, snap.shots[idx], idx, snap);
+      if (elapsed < snap.totalDuration && state.exporting) requestAnimationFrame(frameLoop);
+    }
+
+    recorder.onstop = function () {
+      clearInterval(tickTimer);
+      state.exporting = false;
+      setExportBusyLabel(null);
+      updateToolbarDisabledState();
+      var blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+      var filename = (snap.projectTitle || '帧语导出') + '.webm';
+      saveExportedFile(filename, blob).then(function (saved) {
+        showToast(saved
+          ? '导出完成，已保存（' + formatTime(snap.totalDuration) + '，暂无音频的演示版）'
+          : '已取消保存');
+      });
+    };
+    recorder.onerror = function (e) {
+      clearInterval(tickTimer);
+      state.exporting = false;
+      setExportBusyLabel(null);
+      updateToolbarDisabledState();
+      showToast('录制出错：' + (e.error ? e.error.message : '未知错误'));
+    };
+
+    recorder.start();
+    frameLoop();
+    setTimeout(function () {
+      if (recorder.state !== 'inactive') recorder.stop();
+    }, totalMs + 200);
   }
 
   // ---------- direct edits (bgm/voice cycling, shot add/delete/reorder/caption) ----------
@@ -1473,16 +1698,15 @@
     function runExport() {
       if (!state.activeProjectId) { showToast('还没有项目可以导出'); return; }
       if (!isLoggedIn()) { showToast('请先登录后再导出成片'); openLoginModal(); return; }
-      if (backendAvailable === false) {
-        if (!state.doneSteps.has('preview')) { showToast('先完成分镜生成，再导出视频吧'); return; }
-        showToast('🎬 演示模式：这里会触发录屏导出真实视频文件（当前是静态预览，未连接后台）');
-        return;
+      if (!state.doneSteps.has('preview')) { showToast('先完成分镜生成，再导出视频吧'); return; }
+      // Real client-side recording (canvas + MediaRecorder) produces the
+      // actual downloadable file; the backend call below is just bookkeeping
+      // (marks the project exported) and is best-effort — export still
+      // proceeds locally even if it fails or there's no backend at all.
+      if (backendAvailable !== false) {
+        api('/api/projects/' + state.activeProjectId + '/export', { method: 'POST' }).catch(function () {});
       }
-      api('/api/projects/' + state.activeProjectId + '/export', { method: 'POST' }).then(function (res) {
-        showToast(res.body.note || res.body.error || (res.ok ? '导出成功' : '导出失败'));
-      }).catch(function () {
-        showToast('无法连接后端服务，请确认 node video-agent/server.js 正在运行');
-      });
+      startCanvasExport();
     }
     document.getElementById('btn-export').addEventListener('click', runExport);
     document.getElementById('btn-record-export').addEventListener('click', runExport);
