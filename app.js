@@ -415,6 +415,43 @@
     scrollChatToBottom();
   }
 
+  // ---------- login (prototype-only: no real auth, just a localStorage flag) ----------
+
+  var LOGIN_STORAGE_KEY = 'zhenyu_login_account';
+
+  function isLoggedIn() {
+    try { return !!localStorage.getItem(LOGIN_STORAGE_KEY); } catch (e) { return false; }
+  }
+
+  function setLoggedIn(account) {
+    try {
+      if (account) localStorage.setItem(LOGIN_STORAGE_KEY, account);
+      else localStorage.removeItem(LOGIN_STORAGE_KEY);
+    } catch (e) { /* private mode / storage disabled — UI still updates for this page view */ }
+    applyLoginUI(account);
+  }
+
+  function applyLoginUI(account) {
+    var chip = document.getElementById('user-chip');
+    var loginBtn = document.getElementById('btn-login');
+    if (account) {
+      document.getElementById('user-chip-name').textContent = account.length > 10 ? account.slice(0, 10) + '…' : account;
+      chip.hidden = false;
+      loginBtn.hidden = true;
+    } else {
+      chip.hidden = true;
+      loginBtn.hidden = false;
+    }
+  }
+
+  function openLoginModal() {
+    document.getElementById('login-modal').hidden = false;
+    document.getElementById('login-account').focus();
+  }
+  function closeLoginModal() {
+    document.getElementById('login-modal').hidden = true;
+  }
+
   function openScriptModal() {
     document.getElementById('script-modal-body').textContent = state.scriptText || '暂无脚本内容';
     document.getElementById('script-modal').hidden = false;
@@ -1201,6 +1238,28 @@
       });
     });
 
+    // Homepage showcase cards open the matching example project straight
+    // into the workspace, reusing whichever path (real backend or local
+    // demo simulation) is already active.
+    $all('[data-open-project]').forEach(function (card) {
+      card.addEventListener('click', function () {
+        openProject(card.dataset.openProject);
+        location.hash = '#/workspace';
+      });
+    });
+
+    $all('[data-pricing-cta]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var tier = btn.dataset.pricingCta;
+        if (tier === 'free') {
+          document.querySelector('.mode-grid').scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return;
+        }
+        if (!isLoggedIn()) { showToast('请先登录再升级套餐'); openLoginModal(); return; }
+        showToast('已收到升级申请，我们会尽快联系你（原型演示）');
+      });
+    });
+
     document.getElementById('btn-back').addEventListener('click', function () { location.hash = ''; });
     document.getElementById('btn-new-project').addEventListener('click', function () { startNewProject(state.mode); });
 
@@ -1215,12 +1274,30 @@
     document.getElementById('player-close-btn').addEventListener('click', exitFullscreen);
     document.getElementById('backdrop').addEventListener('click', exitFullscreen);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { exitFullscreen(); closeScriptModal(); }
+      if (e.key === 'Escape') { exitFullscreen(); closeScriptModal(); closeLoginModal(); }
     });
 
     document.getElementById('script-modal-close').addEventListener('click', closeScriptModal);
     document.getElementById('script-modal').addEventListener('click', function (e) {
       if (e.target.id === 'script-modal') closeScriptModal();
+    });
+
+    document.getElementById('btn-login').addEventListener('click', openLoginModal);
+    document.getElementById('login-modal-close').addEventListener('click', closeLoginModal);
+    document.getElementById('login-modal').addEventListener('click', function (e) {
+      if (e.target.id === 'login-modal') closeLoginModal();
+    });
+    document.getElementById('login-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var account = document.getElementById('login-account').value.trim();
+      if (!account) { showToast('请输入手机号或邮箱'); return; }
+      setLoggedIn(account);
+      closeLoginModal();
+      showToast('登录成功（原型演示）');
+    });
+    document.getElementById('user-chip').addEventListener('click', function () {
+      setLoggedIn(null);
+      showToast('已退出登录');
     });
 
     document.getElementById('chk-subtitle').addEventListener('change', function (e) { toggleSubtitles(e.target.checked); });
@@ -1318,6 +1395,7 @@
     attachStaticHandlers();
     renderFilmstrip();
     renderMetaRow();
+    try { applyLoginUI(localStorage.getItem(LOGIN_STORAGE_KEY)); } catch (e) { applyLoginUI(null); }
 
     api('/api/projects').then(function (res) {
       if (!res.ok) throw new Error('backend responded but not ok');

@@ -22,9 +22,14 @@
       <span class="brand-name">帧语</span>
     </div>
     <nav class="site-nav">
-      <a href="#" class="nav-link">使用指南</a>
-      <a href="#" class="nav-link">定价</a>
-      <button type="button" class="btn btn-ghost">登录</button>
+      <a href="#guide" class="nav-link">使用指南</a>
+      <a href="#pricing" class="nav-link">定价</a>
+      <a href="#faq" class="nav-link">常见问题</a>
+      <span id="user-chip" class="user-chip" hidden>
+        <span class="user-chip__avatar">帧</span>
+        <span id="user-chip-name">演示用户</span>
+      </span>
+      <button type="button" id="btn-login" class="btn btn-ghost">登录</button>
     </nav>
   </header>
 
@@ -78,6 +83,261 @@
     </button>
 
   </section>
+
+  <!-- ============ 精彩作品展示 ============ -->
+  <section id="showcase" class="showcase">
+    <div class="section-head">
+      <span class="section-eyebrow">精彩作品</span>
+      <h2>看看别人用帧语做了什么</h2>
+      <p>点击任意作品，直接进入创作页查看它的完整生成过程</p>
+    </div>
+    <div class="showcase-grid">
+
+      <button type="button" class="showcase-card" data-open-project="ocean">
+        <span class="showcase-thumb" style="background:linear-gradient(160deg, oklch(80% 0.09 220), oklch(58% 0.09 240))">
+          <svg class="showcase-play" width="15" height="15" viewBox="0 0 24 24" fill="oklch(100% 0 0)"><path d="M8 5v14l11-7z"></path></svg>
+          <span class="showcase-duration">00:30</span>
+        </span>
+        <span class="showcase-body">
+          <span class="showcase-tag">图片轮播</span>
+          <span class="showcase-title">海洋生物科普·儿童向</span>
+          <span class="showcase-desc">活泼可爱的科普风格，带娃看海洋世界</span>
+        </span>
+      </button>
+
+      <button type="button" class="showcase-card" data-open-project="autumn">
+        <span class="showcase-thumb" style="background:linear-gradient(160deg, oklch(82% 0.08 60), oklch(60% 0.09 30))">
+          <svg class="showcase-play" width="15" height="15" viewBox="0 0 24 24" fill="oklch(100% 0 0)"><path d="M8 5v14l11-7z"></path></svg>
+          <span class="showcase-duration">00:20</span>
+        </span>
+        <span class="showcase-body">
+          <span class="showcase-tag showcase-tag--b">HTML 视频</span>
+          <span class="showcase-title">秋季新品发布预告片</span>
+          <span class="showcase-desc">温暖色调 + 网页动效，突出限时优惠</span>
+        </span>
+      </button>
+
+      <button type="button" class="showcase-card" data-open-project="training">
+        <span class="showcase-thumb" style="background:linear-gradient(160deg, oklch(80% 0.08 200), oklch(58% 0.09 220))">
+          <svg class="showcase-play" width="15" height="15" viewBox="0 0 24 24" fill="oklch(100% 0 0)"><path d="M8 5v14l11-7z"></path></svg>
+          <span class="showcase-duration">00:40</span>
+        </span>
+        <span class="showcase-body">
+          <span class="showcase-tag">图片轮播</span>
+          <span class="showcase-title">内部培训引导视频</span>
+          <span class="showcase-desc">流程讲解 + 案例提醒，语气严谨不生硬</span>
+        </span>
+      </button>
+
+      <button type="button" class="showcase-card" data-open-project="skincare">
+        <span class="showcase-thumb" style="background:linear-gradient(160deg, oklch(82% 0.08 340), oklch(60% 0.09 350))">
+          <svg class="showcase-play" width="15" height="15" viewBox="0 0 24 24" fill="oklch(100% 0 0)"><path d="M8 5v14l11-7z"></path></svg>
+          <span class="showcase-duration">00:15</span>
+        </span>
+        <span class="showcase-body">
+          <span class="showcase-tag">图片轮播</span>
+          <span class="showcase-title">小红书种草·护肤新品</span>
+          <span class="showcase-desc">15 秒快节奏，网感十足的种草文案</span>
+        </span>
+      </button>
+
+      <button type="button" class="showcase-card" data-open-project="case">
+        <span class="showcase-thumb" style="background:linear-gradient(160deg, oklch(82% 0.08 130), oklch(58% 0.09 150))">
+          <svg class="showcase-play" width="15" height="15" viewBox="0 0 24 24" fill="oklch(100% 0 0)"><path d="M8 5v14l11-7z"></path></svg>
+          <span class="showcase-duration">00:25</span>
+        </span>
+        <span class="showcase-body">
+          <span class="showcase-tag showcase-tag--b">HTML 视频</span>
+          <span class="showcase-title">客户案例讲解 Demo</span>
+          <span class="showcase-desc">动态图表呈现前后数据对比</span>
+        </span>
+      </button>
+
+      <button type="button" class="showcase-card" data-open-project="brand">
+        <span class="showcase-thumb" style="background:linear-gradient(160deg, oklch(80% 0.08 280), oklch(56% 0.1 290))">
+          <svg class="showcase-play" width="15" height="15" viewBox="0 0 24 24" fill="oklch(100% 0 0)"><path d="M8 5v14l11-7z"></path></svg>
+          <span class="showcase-duration">00:30</span>
+        </span>
+        <span class="showcase-body">
+          <span class="showcase-tag showcase-tag--b">HTML 视频</span>
+          <span class="showcase-title">品牌故事 30 秒版</span>
+          <span class="showcase-desc">时间线动效串起车库创业历程</span>
+        </span>
+      </button>
+
+    </div>
+  </section>
+
+  <!-- ============ 使用指南 ============ -->
+  <section id="guide" class="guide">
+    <div class="section-head">
+      <span class="section-eyebrow">使用指南</span>
+      <h2>五步，从想法到成片</h2>
+      <p>全程由 AI 自动串联，你只需要在关键节点点头或调整</p>
+    </div>
+    <div class="guide-steps">
+      <div class="guide-step">
+        <span class="guide-step__num">1</span>
+        <h3>选择创作模式</h3>
+        <p>图片轮播适合图文叙事、产品展示；HTML 视频适合动态图形与转场效果</p>
+      </div>
+      <div class="guide-step">
+        <span class="guide-step__num">2</span>
+        <h3>输入提示词或文档</h3>
+        <p>一句创作提示词，或直接粘贴一段知识主题、长文档都可以</p>
+      </div>
+      <div class="guide-step">
+        <span class="guide-step__num">3</span>
+        <h3>AI 自动生成</h3>
+        <p>脚本、分镜、画面、配音、字幕、剪辑一次跑完，全程无需你确认</p>
+      </div>
+      <div class="guide-step">
+        <span class="guide-step__num">4</span>
+        <h3>预览与微调</h3>
+        <p>分镜文案、背景音乐、旁白音色都能直接在页面上点开调整</p>
+      </div>
+      <div class="guide-step">
+        <span class="guide-step__num">5</span>
+        <h3>一键导出</h3>
+        <p>录屏直出成片，项目随时保留，想改随时回来继续编辑</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 定价 ============ -->
+  <section id="pricing" class="pricing">
+    <div class="section-head">
+      <span class="section-eyebrow">定价</span>
+      <h2>按需选择，随时升级</h2>
+      <p>以下价格为原型演示占位，实际收费以正式上线页面为准</p>
+    </div>
+    <div class="pricing-grid">
+
+      <div class="pricing-card">
+        <span class="pricing-card__name">免费体验</span>
+        <div class="pricing-card__price">¥0<span>/ 月</span></div>
+        <ul class="pricing-card__features">
+          <li>每月 3 个作品</li>
+          <li>720P 标清导出</li>
+          <li>基础字幕与配音音色</li>
+          <li>社区支持</li>
+        </ul>
+        <button type="button" class="btn btn-outline pricing-card__cta" data-pricing-cta="free">立即体验</button>
+      </div>
+
+      <div class="pricing-card pricing-card--highlight">
+        <span class="pricing-card__badge">最受欢迎</span>
+        <span class="pricing-card__name">创作者版</span>
+        <div class="pricing-card__price">¥39<span>/ 月</span></div>
+        <ul class="pricing-card__features">
+          <li>每月不限作品数</li>
+          <li>1080P 高清导出，无水印</li>
+          <li>全部旁白音色与背景音乐库</li>
+          <li>优先生成队列</li>
+        </ul>
+        <button type="button" class="btn btn-primary pricing-card__cta" data-pricing-cta="pro">升级到创作者版</button>
+      </div>
+
+      <div class="pricing-card">
+        <span class="pricing-card__name">团队版</span>
+        <div class="pricing-card__price">¥199<span>/ 月</span></div>
+        <ul class="pricing-card__features">
+          <li>多人协作与共享项目库</li>
+          <li>4K 导出</li>
+          <li>专属客服与定制音色</li>
+          <li>API 接入（即将上线）</li>
+        </ul>
+        <button type="button" class="btn btn-outline pricing-card__cta" data-pricing-cta="team">联系我们</button>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ 常见问题 ============ -->
+  <section id="faq" class="faq">
+    <div class="section-head">
+      <span class="section-eyebrow">常见问题</span>
+      <h2>还有疑问？先看看这些</h2>
+    </div>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary>生成一支视频大概需要多久？<svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></summary>
+        <p>根据分镜数量而定，通常 20-60 秒的短视频，1-2 分钟内即可跑完脚本、分镜、画面、配音、字幕、剪辑的全部自动生成流程。</p>
+      </details>
+      <details class="faq-item">
+        <summary>支持哪些视频比例？<svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></summary>
+        <p>目前支持 16:9 和 9:16 两种比例，创作页工具栏一键切换，横屏竖屏场景都能覆盖。</p>
+      </details>
+      <details class="faq-item">
+        <summary>图片轮播和 HTML 视频模式怎么选？<svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></summary>
+        <p>图文叙事、产品展示类内容更适合图片轮播；需要动态图形、数据可视化或转场效果的内容，建议用 HTML 视频模式。</p>
+      </details>
+      <details class="faq-item">
+        <summary>可以中途修改分镜内容吗？<svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></summary>
+        <p>可以，生成完成后直接点击分镜文案即可编辑，也可以在右侧对话框里告诉 AI 你想怎么改，比如换背景音乐、调整分镜顺序。</p>
+      </details>
+      <details class="faq-item">
+        <summary>生成的视频版权归谁？<svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></summary>
+        <p>你输入的提示词/文档，以及最终生成的成片，版权归你所有，可用于个人或商业用途（占位说明，实际以正式服务条款为准）。</p>
+      </details>
+      <details class="faq-item">
+        <summary>导出的视频保存在哪里？<svg class="faq-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></summary>
+        <p>点击"录屏导出"后会在本地生成视频文件；项目本身也会保留在历史项目里，随时可以重新打开继续编辑。</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============ 交流群 ============ -->
+  <section id="community" class="community">
+    <div class="community-card">
+      <div class="community-qr" aria-hidden="true">
+        <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+          <rect width="72" height="72" rx="10" fill="var(--surface)"></rect>
+          <g fill="var(--text)">
+            <rect x="6" y="6" width="18" height="18" rx="2"></rect>
+            <rect x="10" y="10" width="10" height="10" rx="1" fill="var(--surface)"></rect>
+            <rect x="48" y="6" width="18" height="18" rx="2"></rect>
+            <rect x="52" y="10" width="10" height="10" rx="1" fill="var(--surface)"></rect>
+            <rect x="6" y="48" width="18" height="18" rx="2"></rect>
+            <rect x="10" y="52" width="10" height="10" rx="1" fill="var(--surface)"></rect>
+            <rect x="30" y="6" width="6" height="6"></rect>
+            <rect x="30" y="30" width="12" height="12"></rect>
+            <rect x="48" y="30" width="6" height="6"></rect>
+            <rect x="30" y="48" width="6" height="6"></rect>
+            <rect x="48" y="48" width="6" height="18"></rect>
+            <rect x="60" y="48" width="6" height="6"></rect>
+          </g>
+        </svg>
+      </div>
+      <div class="community-body">
+        <h3>加入产品交流群</h3>
+        <p>扫码添加社群小助手，获取新手教程、参与产品内测、和其他创作者交流创作心得</p>
+        <div class="community-links">
+          <button type="button" class="ghost-btn-sm" data-toast="使用文档（原型演示）">使用文档</button>
+          <button type="button" class="ghost-btn-sm" data-toast="更新日志（原型演示）">更新日志</button>
+          <button type="button" class="ghost-btn-sm" data-toast="反馈已收到，感谢你的建议！（原型演示）">反馈问题</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="site-footer__brand">
+      <svg width="22" height="22" viewBox="0 0 30 30" fill="none">
+        <rect x="1" y="1" width="28" height="28" rx="8" fill="var(--text)"></rect>
+        <path d="M11 9 L21 15 L11 21 Z" fill="var(--bg)"></path>
+      </svg>
+      <span>帧语</span>
+    </div>
+    <p class="site-footer__tagline">一句话，从脚本到成片。</p>
+    <nav class="site-footer__links">
+      <a href="#guide">使用指南</a>
+      <a href="#pricing">定价</a>
+      <a href="#faq">常见问题</a>
+      <a href="#community">交流群</a>
+    </nav>
+    <p class="site-footer__copy">© 2026 帧语 · AI 视频创作助手，本站为产品原型演示</p>
+  </footer>
 </div>
 
 <!-- ============ WORKSPACE VIEW ============ -->
@@ -264,6 +524,33 @@
       </button>
     </div>
     <pre id="script-modal-body" class="script-modal__body"></pre>
+  </div>
+</div>
+
+<div id="login-modal" class="script-modal" hidden>
+  <div class="login-modal__card">
+    <div class="script-modal__header">
+      <span>登录帐号</span>
+      <button type="button" id="login-modal-close" class="icon-btn" aria-label="关闭">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <form id="login-form" class="login-form">
+      <label class="login-form__field">
+        <span>手机号或邮箱</span>
+        <input type="text" id="login-account" placeholder="请输入手机号或邮箱" autocomplete="username" required>
+      </label>
+      <label class="login-form__field">
+        <span>密码</span>
+        <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password" required>
+      </label>
+      <div class="login-form__row">
+        <label class="login-form__remember"><input type="checkbox" checked> 记住我</label>
+        <button type="button" class="login-form__link" data-toast="验证码已发送（原型演示）">使用验证码登录</button>
+      </div>
+      <button type="submit" class="btn btn-primary login-form__submit">登录</button>
+      <p class="login-form__hint">还没有账号？<button type="button" class="login-form__link" data-toast="注册功能开发中（原型演示）">立即注册</button></p>
+    </form>
   </div>
 </div>
 
