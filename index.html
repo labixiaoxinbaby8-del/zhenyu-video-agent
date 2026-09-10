@@ -373,7 +373,7 @@
       <button type="button" class="icon-btn" aria-label="设置" data-toast="设置（原型演示）">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.65a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.35 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04Z"></path></svg>
       </button>
-      <span class="user-avatar" title="labixiaoxinbaby8@gmail.com">帧</span>
+      <button type="button" id="workspace-user-btn" class="user-avatar" aria-label="账号">?</button>
       <button type="button" id="btn-export" class="btn btn-primary" disabled>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--bg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="M7 10l5 5 5-5"></path><path d="M5 21h14"></path></svg>
         <span class="btn-label">导出视频</span>
@@ -535,26 +535,27 @@
 <div id="login-modal" class="script-modal" hidden>
   <div class="login-modal__card">
     <div class="script-modal__header">
-      <span>登录帐号</span>
+      <span id="login-modal-title">登录帐号</span>
       <button type="button" id="login-modal-close" class="icon-btn" aria-label="关闭">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
       </button>
     </div>
     <form id="login-form" class="login-form">
+      <p id="login-form-error" class="login-form__error" hidden></p>
+      <label class="login-form__field" id="login-name-field" hidden>
+        <span>昵称</span>
+        <input type="text" id="login-name" placeholder="怎么称呼你" autocomplete="nickname" maxlength="40">
+      </label>
       <label class="login-form__field">
-        <span>手机号或邮箱</span>
-        <input type="text" id="login-account" placeholder="请输入手机号或邮箱" autocomplete="username" required>
+        <span>邮箱</span>
+        <input type="email" id="login-account" placeholder="请输入邮箱" autocomplete="username" required>
       </label>
       <label class="login-form__field">
         <span>密码</span>
-        <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password" required>
+        <input type="password" id="login-password" placeholder="至少 6 位" autocomplete="current-password" minlength="6" required>
       </label>
-      <div class="login-form__row">
-        <label class="login-form__remember"><input type="checkbox" checked> 记住我</label>
-        <button type="button" class="login-form__link" data-toast="验证码已发送（原型演示）">使用验证码登录</button>
-      </div>
-      <button type="submit" class="btn btn-primary login-form__submit">登录</button>
-      <p class="login-form__hint">还没有账号？<button type="button" class="login-form__link" data-toast="注册功能开发中（原型演示）">立即注册</button></p>
+      <button type="submit" class="btn btn-primary login-form__submit" id="login-form-submit">登录</button>
+      <p class="login-form__hint"><span id="login-mode-hint">还没有账号？</span><button type="button" class="login-form__link" id="login-mode-toggle">立即注册</button></p>
     </form>
   </div>
 </div>

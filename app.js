@@ -26,7 +26,9 @@
     chatExpanded: false,
     batchEdit: false,
     scriptText: '',
-    exporting: false
+    exporting: false,
+    currentUser: null,
+    isDemo: false
   };
 
   var lastProjectList = []; // cached most-recent sidebar list, for client-side search filtering
@@ -513,36 +515,70 @@
     scrollChatToBottom();
   }
 
-  // ---------- login (prototype-only: no real auth, just a localStorage flag) ----------
+  // ---------- login (real accounts: cookie session against server.js /
+  // db.js — same-origin fetch sends the session cookie automatically, no
+  // credentials:'include' needed) ----------
 
-  var LOGIN_STORAGE_KEY = 'zhenyu_login_account';
+  var loginModalMode = 'login'; // 'login' | 'register'
 
-  function isLoggedIn() {
-    try { return !!localStorage.getItem(LOGIN_STORAGE_KEY); } catch (e) { return false; }
+  function isLoggedIn() { return !!state.currentUser; }
+
+  // Pulls the real session state from the server on boot — a page reload
+  // must not silently "log you out" just because nothing is cached client-side.
+  function refreshAuthState() {
+    return api('/api/auth/me').then(function (res) {
+      state.currentUser = res.ok ? res.body.user : null;
+      applyLoginUI(state.currentUser);
+    }).catch(function () {
+      // No backend at all (e.g. the static bundle/Artifact preview) — stay
+      // logged out rather than leave an unhandled rejection in the console.
+      state.currentUser = null;
+      applyLoginUI(null);
+    });
   }
 
-  function setLoggedIn(account) {
-    try {
-      if (account) localStorage.setItem(LOGIN_STORAGE_KEY, account);
-      else localStorage.removeItem(LOGIN_STORAGE_KEY);
-    } catch (e) { /* private mode / storage disabled — UI still updates for this page view */ }
-    applyLoginUI(account);
-  }
-
-  function applyLoginUI(account) {
+  function applyLoginUI(user) {
     var chip = document.getElementById('user-chip');
     var loginBtn = document.getElementById('btn-login');
-    if (account) {
-      document.getElementById('user-chip-name').textContent = account.length > 10 ? account.slice(0, 10) + '…' : account;
+    if (user) {
+      var label = user.displayName || user.email;
+      document.getElementById('user-chip-name').textContent = label.length > 10 ? label.slice(0, 10) + '…' : label;
       chip.hidden = false;
       loginBtn.hidden = true;
     } else {
       chip.hidden = true;
       loginBtn.hidden = false;
     }
+    var wsBtn = document.getElementById('workspace-user-btn');
+    if (wsBtn) {
+      wsBtn.textContent = user ? (user.displayName || user.email).charAt(0).toUpperCase() : '?';
+      wsBtn.title = user ? '已登录：' + (user.displayName || user.email) + '（点击退出登录）' : '未登录（点击登录）';
+    }
+  }
+
+  function logout() {
+    return api('/api/auth/logout', { method: 'POST' }).then(function () {
+      state.currentUser = null;
+      applyLoginUI(null);
+      showToast('已退出登录');
+      if (state.activeProjectId && !state.isDemo) startNewProject(state.mode);
+    });
+  }
+
+  function setLoginModalMode(mode) {
+    loginModalMode = mode;
+    var isRegister = mode === 'register';
+    document.getElementById('login-modal-title').textContent = isRegister ? '注册帐号' : '登录帐号';
+    document.getElementById('login-form-submit').textContent = isRegister ? '注册' : '登录';
+    document.getElementById('login-name-field').hidden = !isRegister;
+    document.getElementById('login-mode-hint').textContent = isRegister ? '已有账号？' : '还没有账号？';
+    document.getElementById('login-mode-toggle').textContent = isRegister ? '直接登录' : '立即注册';
+    document.getElementById('login-password').setAttribute('autocomplete', isRegister ? 'new-password' : 'current-password');
+    document.getElementById('login-form-error').hidden = true;
   }
 
   function openLoginModal() {
+    setLoginModalMode('login');
     document.getElementById('login-modal').hidden = false;
     document.getElementById('login-account').focus();
   }
@@ -858,6 +894,14 @@
 
   // ---------- direct edits (bgm/voice cycling, shot add/delete/reorder/caption) ----------
 
+  // Demo/showcase projects (state.isDemo) are public and read-only server-side
+  // (see server.js's canMutate()) — block edits at the UI layer too instead of
+  // letting them look like they worked locally and then silently fail to save.
+  function guardEditable() {
+    if (state.isDemo) { showToast('这是一个演示项目，不能编辑——新建一个属于你自己的项目试试～'); return false; }
+    return true;
+  }
+
   function persistShots() {
     if (state.activeProjectId && backendAvailable !== false) {
       var payload = {
@@ -874,6 +918,7 @@
   }
 
   function cycleBgm() {
+    if (!guardEditable()) return;
     var next = BGM_CANDIDATES[(BGM_CANDIDATES.indexOf(state.bgm) + 1) % BGM_CANDIDATES.length];
     state.bgm = next;
     renderMetaRow();
@@ -884,6 +929,7 @@
   }
 
   function cycleVoice() {
+    if (!guardEditable()) return;
     var next = VOICE_CANDIDATES[(VOICE_CANDIDATES.indexOf(state.voice) + 1) % VOICE_CANDIDATES.length];
     state.voice = next;
     renderMetaRow();
@@ -895,6 +941,7 @@
 
   function addShot() {
     if (!state.activeProjectId) { showToast('先在右侧输入提示词创建一个项目吧'); return; }
+    if (!guardEditable()) return;
     var hue = LOCAL_SHOT_HUES[state.shots.length % LOCAL_SHOT_HUES.length];
     var shot = { status: 'loading', hue: hue, caption: '新分镜（点击可编辑文案）' };
     state.shots.push(shot);
@@ -911,6 +958,7 @@
   }
 
   function deleteShot(i) {
+    if (!guardEditable()) return;
     if (!window.confirm('确定要删除这个分镜吗？此操作不可撤销。')) return;
     var wasActive = !!(state.shots[i] && state.shots[i].active);
     state.shots.splice(i, 1);
@@ -924,6 +972,7 @@
 
   function reorderShots(fromIndex, toIndex) {
     if (fromIndex === toIndex) return;
+    if (!guardEditable()) return;
     var moved = state.shots.splice(fromIndex, 1)[0];
     state.shots.splice(toIndex, 0, moved);
     renderFilmstrip();
@@ -931,6 +980,7 @@
   }
 
   function toggleBatchEdit() {
+    if (!state.batchEdit && !guardEditable()) return;
     state.batchEdit = !state.batchEdit;
     document.getElementById('btn-batch-edit').classList.toggle('is-active', state.batchEdit);
     renderFilmstrip();
@@ -938,6 +988,7 @@
   }
 
   function commitShotCaption(shot, i, value) {
+    if (!guardEditable()) { renderFilmstrip(); return; }
     shot.caption = value.trim() || shot.caption;
     renderFilmstrip();
     persistShots();
@@ -1252,6 +1303,7 @@
     var seed = LOCAL_SEEDS.filter(function (s) { return s.id === id; })[0];
     if (!seed) return;
     state.activeProjectId = id;
+    state.isDemo = false; // no ownership concept in local (no-backend) simulation — everything's editable
     state.mode = seed.mode;
     state.projectTitle = seed.title;
     state.bgm = LOCAL_DEFAULT_VOICE_BGM.bgm;
@@ -1339,25 +1391,29 @@
   }
 
   function buildProjectRow(opts) {
-    // opts: { id, title, metaText, thumbHue, onOpen, isLocal }
+    // opts: { id, title, metaText, thumbHue, onOpen, isLocal, isDemo }
     var row = document.createElement('div');
     row.className = 'project-item';
     row.dataset.id = opts.id;
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
     var thumb = 'linear-gradient(160deg, oklch(84% 0.07 ' + opts.thumbHue + '), oklch(70% 0.08 ' + (opts.thumbHue + 10) + '))';
+    // Demo/showcase projects are read-only (server-enforced) — no point
+    // offering a rename/delete menu that would just 403.
+    var menuBtnHtml = opts.isDemo ? '' :
+      '<button type="button" class="project-item-menu-btn" aria-label="更多操作">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>' +
+      '</button>';
     row.innerHTML =
       '<div class="project-thumb" style="background:' + thumb + '"></div>' +
       '<div class="project-item-body">' +
         '<span class="project-item-title">' + escapeHtml(opts.title) + '</span>' +
         '<span class="project-item-meta">' + opts.metaText + '</span>' +
-      '</div>' +
-      '<button type="button" class="project-item-menu-btn" aria-label="更多操作">' +
-        '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>' +
-      '</button>';
+      '</div>' + menuBtnHtml;
     row.addEventListener('click', opts.onOpen);
     row.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); opts.onOpen(); } });
-    row.querySelector('.project-item-menu-btn').addEventListener('click', function (e) {
+    var menuBtn = row.querySelector('.project-item-menu-btn');
+    if (menuBtn) menuBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       if (openProjectMenuEl && openProjectMenuEl.dataset.forId === opts.id) { closeAnyProjectMenu(); return; }
       closeAnyProjectMenu();
@@ -1417,9 +1473,10 @@
       var row = buildProjectRow({
         id: proj.id,
         title: proj.title,
-        metaText: modeLabel(proj.mode) + ' · ' + escapeHtml(proj.status === 'running' ? '编辑中' : proj.meta),
+        metaText: modeLabel(proj.mode) + ' · ' + escapeHtml(proj.isDemo ? '演示项目' : (proj.status === 'running' ? '编辑中' : proj.meta)),
         thumbHue: proj.thumbHue,
         isLocal: false,
+        isDemo: proj.isDemo,
         onOpen: function () { loadProjectFromServer(proj.id); location.hash = '#/workspace'; }
       });
       listEl.appendChild(row);
@@ -1451,6 +1508,7 @@
       if (!res.ok) { showToast('加载项目失败：' + (res.body.error || res.status)); return; }
       var proj = res.body;
       state.activeProjectId = proj.id;
+      state.isDemo = !!proj.isDemo;
       state.mode = proj.mode;
       state.projectTitle = proj.title;
       state.bgm = proj.bgm;
@@ -1509,6 +1567,7 @@
     localClearTimers();
     state.mode = mode || state.mode;
     state.activeProjectId = null;
+    state.isDemo = false;
     state.projectTitle = '未命名项目';
     state.doneSteps = new Set();
     state.currentStep = null;
@@ -1563,16 +1622,28 @@
     var input = document.getElementById('chat-input');
     var text = input.value.trim();
     if (!text) { showToast('请先输入一句提示词吧'); input.focus(); return; }
-    input.value = '';
-    input.style.height = '';
 
     if (state.activeProjectId) {
+      if (!guardEditable()) return;
+      input.value = '';
+      input.style.height = '';
       addUserMessage(text);
       if (backendAvailable === false) localHandleMessage(text);
       else postMessage(state.activeProjectId, text);
       return;
     }
 
+    // Creating a project requires login server-side (POST /api/projects
+    // 401s otherwise) — check before any optimistic UI change so a
+    // logged-out attempt doesn't look like it half-started a project.
+    if (backendAvailable !== false && !isLoggedIn()) {
+      showToast('请先登录再创建项目');
+      openLoginModal();
+      return;
+    }
+
+    input.value = '';
+    input.style.height = '';
     var emptyMsg = document.getElementById('chat-empty');
     if (emptyMsg) emptyMsg.remove();
     document.getElementById('suggestions').hidden = true;
@@ -1678,17 +1749,39 @@
     document.getElementById('login-modal').addEventListener('click', function (e) {
       if (e.target.id === 'login-modal') closeLoginModal();
     });
+    document.getElementById('login-mode-toggle').addEventListener('click', function () {
+      setLoginModalMode(loginModalMode === 'login' ? 'register' : 'login');
+    });
     document.getElementById('login-form').addEventListener('submit', function (e) {
       e.preventDefault();
-      var account = document.getElementById('login-account').value.trim();
-      if (!account) { showToast('请输入手机号或邮箱'); return; }
-      setLoggedIn(account);
-      closeLoginModal();
-      showToast('登录成功（原型演示）');
+      var errorEl = document.getElementById('login-form-error');
+      errorEl.hidden = true;
+      var email = document.getElementById('login-account').value.trim();
+      var password = document.getElementById('login-password').value;
+      var isRegister = loginModalMode === 'register';
+      var submitBtn = document.getElementById('login-form-submit');
+      submitBtn.disabled = true;
+      var body = isRegister
+        ? { email: email, password: password, displayName: document.getElementById('login-name').value.trim() }
+        : { email: email, password: password };
+      api(isRegister ? '/api/auth/register' : '/api/auth/login', { method: 'POST', body: body }).then(function (res) {
+        submitBtn.disabled = false;
+        if (!res.ok) { errorEl.textContent = res.body.error || '出错了，请重试'; errorEl.hidden = false; return; }
+        state.currentUser = res.body.user;
+        applyLoginUI(state.currentUser);
+        closeLoginModal();
+        document.getElementById('login-form').reset();
+        showToast(isRegister ? '注册成功，欢迎～' : '登录成功');
+        updateToolbarDisabledState();
+      }).catch(function () {
+        submitBtn.disabled = false;
+        errorEl.textContent = '无法连接后端服务，请确认 node video-agent/server.js 正在运行';
+        errorEl.hidden = false;
+      });
     });
-    document.getElementById('user-chip').addEventListener('click', function () {
-      setLoggedIn(null);
-      showToast('已退出登录');
+    document.getElementById('user-chip').addEventListener('click', logout);
+    document.getElementById('workspace-user-btn').addEventListener('click', function () {
+      if (isLoggedIn()) logout(); else openLoginModal();
     });
 
     document.getElementById('chk-subtitle').addEventListener('change', function (e) { toggleSubtitles(e.target.checked); });
@@ -1738,7 +1831,7 @@
       var display = document.getElementById('project-title');
       var input = document.getElementById('project-title-input');
       var next = input.value.trim();
-      if (next) {
+      if (next && guardEditable()) {
         state.projectTitle = next;
         updateProjectTitleUI();
         if (state.activeProjectId && backendAvailable !== false) {
@@ -1788,7 +1881,7 @@
     attachStaticHandlers();
     renderFilmstrip();
     renderMetaRow();
-    try { applyLoginUI(localStorage.getItem(LOGIN_STORAGE_KEY)); } catch (e) { applyLoginUI(null); }
+    refreshAuthState();
 
     api('/api/projects').then(function (res) {
       if (!res.ok) throw new Error('backend responded but not ok');

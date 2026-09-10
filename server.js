@@ -1,7 +1,10 @@
-// 帧语 · 真实 Node 后端（零外部依赖）
+// 帧语 · 真实 Node 后端（零外部依赖：数据库用 Node 内置的 node:sqlite，鉴权用
+// Node 内置的 crypto，没有引入任何 npm 包）
 //
-// 提供静态文件服务 + 一套真实的项目/流水线 REST + SSE 接口。
-// 生成逻辑本身是【占位规则】，不是真实 AI —— 脚本/大纲/配音选择等都由确定性规则
+// 提供静态文件服务 + 一套真实的项目/流水线 REST + SSE 接口，外加真实的账号系统
+// （注册/登录/会话 cookie），项目按登录用户归属、持久化在 SQLite 里（见 db.js）。
+//
+// 生成逻辑本身仍是【占位规则】，不是真实 AI —— 脚本/大纲/配音选择等都由确定性规则
 // 从 prompt 里粗略推导出来，用来验证前后端的真实交互链路（创建项目 -> 服务端异步跑
 // 流水线 -> SSE 推送每一步 -> 落盘持久化 -> 刷新后可从磁盘恢复）。接入真实文生图 /
 // LLM / TTS 时，只需要替换 buildContent() 和各阶段 run() 里“生成”的那一行。
@@ -11,11 +14,14 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dbLayer = require('./db');
 
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
-const DB_FILE = path.join(DATA_DIR, 'projects.json');
 const PORT = process.env.PORT || 5173;
+// Set COOKIE_SECURE=1 once this is served over HTTPS in production — the
+// session cookie must NOT be marked Secure while testing over plain
+// http://localhost, or the browser silently refuses to store it.
+const COOKIE_SECURE = process.env.COOKIE_SECURE === '1';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -35,40 +41,50 @@ const VOICE_BGM_RULES = [
 ];
 const DEFAULT_VOICE_BGM = { voice: '知性女声', bgm: '海风轻快民谣' };
 
-// ---------- persistence ----------
+// ---------- persistence (SQLite via db.js; see that file for the schema) ----------
 
-let db = { projects: [] };
+function findProject(id) { return dbLayer.getProject(id); }
+function saveDb(project) { dbLayer.saveProject(project); }
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+// ---------- auth: cookies + sessions ----------
 
-function loadDb() {
-  ensureDataDir();
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-      if (!Array.isArray(db.projects)) db.projects = [];
-      return;
-    } catch (e) {
-      console.error('projects.json 解析失败，将重新播种示例数据：', e.message);
-    }
-  }
-  db = { projects: seedProjects() };
-  saveDb();
-}
+const SESSION_COOKIE = 'zy_session';
 
-let saveScheduled = false;
-function saveDb() {
-  // 简单去抖：同一个事件循环 tick 内的多次修改只落盘一次
-  if (saveScheduled) return;
-  saveScheduled = true;
-  setImmediate(function () {
-    saveScheduled = false;
-    ensureDataDir();
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+function parseCookies(req) {
+  var header = req.headers.cookie;
+  var out = {};
+  if (!header) return out;
+  header.split(';').forEach(function (part) {
+    var idx = part.indexOf('=');
+    if (idx === -1) return;
+    var k = part.slice(0, idx).trim();
+    var v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
   });
+  return out;
 }
+
+function getCurrentUser(req) {
+  var token = parseCookies(req)[SESSION_COOKIE];
+  return dbLayer.getUserBySessionToken(token);
+}
+
+function setSessionCookie(res, token) {
+  var attrs = [
+    SESSION_COOKIE + '=' + encodeURIComponent(token),
+    'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=' + (30 * 24 * 60 * 60)
+  ];
+  if (COOKIE_SECURE) attrs.push('Secure');
+  res.setHeader('Set-Cookie', attrs.join('; '));
+}
+
+function clearSessionCookie(res) {
+  var attrs = [SESSION_COOKIE + '=', 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
+  if (COOKIE_SECURE) attrs.push('Secure');
+  res.setHeader('Set-Cookie', attrs.join('; '));
+}
+
+function isValidEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s); }
 
 // ---------- placeholder generation "brain" ----------
 
@@ -177,15 +193,11 @@ function broadcast(id, entry) {
   subscribers[id].forEach(function (res) { res.write(payload); });
 }
 
-function findProject(id) {
-  return db.projects.filter(function (p) { return p.id === id; })[0] || null;
-}
-
 function pushEntry(project, entry) {
   entry.at = new Date().toISOString();
   project.timeline.push(entry);
   project.updatedAt = entry.at;
-  saveDb();
+  saveDb(project);
   broadcast(project.id, entry);
 }
 
@@ -302,10 +314,11 @@ function runPipelineSteps(project, content, live) {
   });
 }
 
-function createProject(mode, prompt) {
+function createProject(mode, prompt, userId) {
   var content = buildContent(prompt);
   var project = {
     id: crypto.randomUUID(),
+    userId: userId,
     mode: mode === 'html' ? 'html' : 'slideshow',
     title: deriveTitle(prompt),
     prompt: prompt,
@@ -321,15 +334,20 @@ function createProject(mode, prompt) {
     bgm: DEFAULT_VOICE_BGM.bgm,
     totalDuration: content.totalDuration,
     exported: false,
+    script: '',
     timeline: [{ type: 'user_message', text: prompt, at: new Date().toISOString() }]
   };
-  db.projects.unshift(project);
-  saveDb();
+  saveDb(project);
   runPipelineSteps(project, content, true);
   return project;
 }
 
-function seedProjects() {
+// Demo/showcase projects (user_id = NULL) — seeded once, the first time the
+// database is empty, so every fresh install has something in the sidebar to
+// look at. They're public and read-only (see the ownership check in the
+// route handlers below): anyone can open and preview one, but only a real
+// project you created can be edited, exported, or deleted.
+function buildSeedProjects() {
   var seeds = [
     { id: 'ocean', title: '海洋生物科普·儿童向', mode: 'slideshow', meta: '编辑中',
       prompt: '帮我做一支 30 秒的儿童科普视频，讲海洋生物，风格活泼可爱，配欢快背景音乐' },
@@ -349,6 +367,7 @@ function seedProjects() {
     var content = buildContent(seed.prompt);
     var project = {
       id: seed.id,
+      userId: null,
       mode: seed.mode,
       title: seed.title,
       prompt: seed.prompt,
@@ -442,14 +461,22 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
-function publicProject(p) {
+function publicProject(p, viewer) {
   return {
     id: p.id, mode: p.mode, title: p.title, prompt: p.prompt, meta: p.meta,
     thumbHue: p.thumbHue, status: p.status, doneSteps: p.doneSteps, currentStep: p.currentStep,
     shots: p.shots, voice: p.voice, bgm: p.bgm, totalDuration: p.totalDuration,
-    exported: p.exported, timeline: p.timeline, updatedAt: p.updatedAt, script: p.script || ''
+    exported: p.exported, timeline: p.timeline, updatedAt: p.updatedAt, script: p.script || '',
+    isDemo: p.userId === null,
+    isOwner: !!(viewer && p.userId === viewer.id)
   };
 }
+
+// A demo/seed project (userId === null) is public and read-only: anyone can
+// open and preview it, but only its owner may mutate it. A real project's
+// owner is the only one who may do anything with it at all — there's no
+// "shared with other users" concept here.
+function canMutate(project, user) { return !!user && project.userId === user.id; }
 
 var server = http.createServer(function (req, res) {
   var u = new URL(req.url, 'http://localhost');
@@ -465,20 +492,72 @@ var server = http.createServer(function (req, res) {
     return res.end();
   }
 
-  // GET /api/projects — sidebar list
+  // ---------- auth ----------
+
+  if (m === 'POST' && pathname === '/api/auth/register') {
+    return readJsonBody(req).then(function (body) {
+      var email = (body.email || '').toString().trim().toLowerCase();
+      var password = (body.password || '').toString();
+      var displayName = (body.displayName || '').toString().trim().slice(0, 40);
+      if (!isValidEmail(email)) return sendJson(res, 400, { error: '邮箱格式不对' });
+      if (password.length < 6) return sendJson(res, 400, { error: '密码至少 6 位' });
+      var result = dbLayer.createUser(email, password, displayName);
+      if (result.error === 'EMAIL_TAKEN') return sendJson(res, 409, { error: '这个邮箱已经注册过了，直接登录吧' });
+      var token = dbLayer.createSession(result.user.id);
+      setSessionCookie(res, token);
+      sendJson(res, 201, { user: result.user });
+    }).catch(function () { sendJson(res, 400, { error: '请求体不是合法 JSON' }); });
+  }
+
+  if (m === 'POST' && pathname === '/api/auth/login') {
+    return readJsonBody(req).then(function (body) {
+      var email = (body.email || '').toString().trim().toLowerCase();
+      var password = (body.password || '').toString();
+      var user = dbLayer.verifyLogin(email, password);
+      if (!user) return sendJson(res, 401, { error: '邮箱或密码不对' });
+      var token = dbLayer.createSession(user.id);
+      setSessionCookie(res, token);
+      sendJson(res, 200, { user: user });
+    }).catch(function () { sendJson(res, 400, { error: '请求体不是合法 JSON' }); });
+  }
+
+  if (m === 'POST' && pathname === '/api/auth/logout') {
+    dbLayer.destroySession(parseCookies(req)[SESSION_COOKIE]);
+    clearSessionCookie(res);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (m === 'GET' && pathname === '/api/auth/me') {
+    var me = getCurrentUser(req);
+    if (!me) return sendJson(res, 401, { error: '未登录' });
+    return sendJson(res, 200, { user: me });
+  }
+
+  // ---------- projects ----------
+
+  var currentUser = getCurrentUser(req);
+
+  // GET /api/projects — sidebar list: your own projects + the public demos
   if (m === 'GET' && pathname === '/api/projects') {
-    return sendJson(res, 200, db.projects.map(function (p) {
-      return { id: p.id, mode: p.mode, title: p.title, meta: p.meta, thumbHue: p.thumbHue, status: p.status, updatedAt: p.updatedAt };
+    var list = dbLayer.listProjectsFor(currentUser ? currentUser.id : null);
+    return sendJson(res, 200, list.map(function (p) {
+      return {
+        id: p.id, mode: p.mode, title: p.title, meta: p.meta, thumbHue: p.thumbHue,
+        status: p.status, updatedAt: p.updatedAt, isDemo: p.userId === null
+      };
     }));
   }
 
-  // POST /api/projects {mode, prompt} — create + kick off live pipeline
+  // POST /api/projects {mode, prompt} — create + kick off live pipeline.
+  // Requires login: generation calls real (paid) AI services once those are
+  // wired in, so an anonymous visitor must not be able to trigger one.
   if (m === 'POST' && pathname === '/api/projects') {
+    if (!currentUser) return sendJson(res, 401, { error: '请先登录再创建项目' });
     return readJsonBody(req).then(function (body) {
       var prompt = (body.prompt || '').toString().trim();
       if (!prompt) return sendJson(res, 400, { error: 'prompt 不能为空' });
-      var project = createProject(body.mode, prompt);
-      sendJson(res, 201, publicProject(project));
+      var project = createProject(body.mode, prompt, currentUser.id);
+      sendJson(res, 201, publicProject(project, currentUser));
     }).catch(function () { sendJson(res, 400, { error: '请求体不是合法 JSON' }); });
   }
 
@@ -486,11 +565,13 @@ var server = http.createServer(function (req, res) {
   if (m1 && m === 'GET') {
     var proj = findProject(m1[1]);
     if (!proj) return sendJson(res, 404, { error: '项目不存在' });
-    return sendJson(res, 200, publicProject(proj));
+    if (proj.userId !== null && !canMutate(proj, currentUser)) return sendJson(res, 403, { error: '没有权限查看这个项目' });
+    return sendJson(res, 200, publicProject(proj, currentUser));
   }
   if (m1 && m === 'PATCH') {
     var proj2 = findProject(m1[1]);
     if (!proj2) return sendJson(res, 404, { error: '项目不存在' });
+    if (!canMutate(proj2, currentUser)) return sendJson(res, 403, { error: proj2.userId === null ? '演示项目不可编辑，新建一个属于你自己的项目吧' : '没有权限修改这个项目' });
     return readJsonBody(req).then(function (body) {
       if (body.bgm) proj2.bgm = body.bgm;
       if (body.voice) proj2.voice = body.voice;
@@ -503,15 +584,15 @@ var server = http.createServer(function (req, res) {
       }
       if (typeof body.totalDuration === 'number') proj2.totalDuration = body.totalDuration;
       proj2.updatedAt = new Date().toISOString();
-      saveDb();
-      sendJson(res, 200, publicProject(proj2));
+      saveDb(proj2);
+      sendJson(res, 200, publicProject(proj2, currentUser));
     }).catch(function () { sendJson(res, 400, { error: '请求体不是合法 JSON' }); });
   }
   if (m1 && m === 'DELETE') {
-    var delIdx = db.projects.findIndex(function (p) { return p.id === m1[1]; });
-    if (delIdx === -1) return sendJson(res, 404, { error: '项目不存在' });
-    db.projects.splice(delIdx, 1);
-    saveDb();
+    var toDelete = findProject(m1[1]);
+    if (!toDelete) return sendJson(res, 404, { error: '项目不存在' });
+    if (!canMutate(toDelete, currentUser)) return sendJson(res, 403, { error: toDelete.userId === null ? '演示项目不可删除' : '没有权限删除这个项目' });
+    dbLayer.deleteProject(m1[1]);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -520,6 +601,7 @@ var server = http.createServer(function (req, res) {
   if (m2 && m === 'GET') {
     var proj3 = findProject(m2[1]);
     if (!proj3) { res.writeHead(404); return res.end(); }
+    if (proj3.userId !== null && !canMutate(proj3, currentUser)) { res.writeHead(403); return res.end(); }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
@@ -537,6 +619,7 @@ var server = http.createServer(function (req, res) {
   if (m3 && m === 'POST') {
     var proj4 = findProject(m3[1]);
     if (!proj4) return sendJson(res, 404, { error: '项目不存在' });
+    if (!canMutate(proj4, currentUser)) return sendJson(res, 403, { error: proj4.userId === null ? '演示项目不可编辑，新建一个属于你自己的项目吧' : '没有权限修改这个项目' });
     return readJsonBody(req).then(function (body) {
       var text = (body.text || '').toString();
       pushEntry(proj4, { type: 'user_message', text: text });
@@ -579,11 +662,12 @@ var server = http.createServer(function (req, res) {
   if (m4 && m === 'POST') {
     var proj5 = findProject(m4[1]);
     if (!proj5) return sendJson(res, 404, { error: '项目不存在' });
+    if (!canMutate(proj5, currentUser)) return sendJson(res, 403, { error: '没有权限导出这个项目' });
     if (!proj5.doneSteps.indexOf) proj5.doneSteps = proj5.doneSteps || [];
     if (proj5.doneSteps.indexOf('preview') === -1) return sendJson(res, 409, { error: '还没有生成完成，无法导出' });
     proj5.exported = true;
     proj5.updatedAt = new Date().toISOString();
-    saveDb();
+    saveDb(proj5);
     return sendJson(res, 200, { ok: true, note: '演示模式：这里会触发录屏导出真实视频文件（后台未接入真实渲染）' });
   }
 
@@ -592,8 +676,9 @@ var server = http.createServer(function (req, res) {
   if (m5 && m === 'POST') {
     var proj6 = findProject(m5[1]);
     if (!proj6) return sendJson(res, 404, { error: '项目不存在' });
+    if (!canMutate(proj6, currentUser)) return sendJson(res, 403, { error: '没有权限操作这个项目' });
     var cancelled = cancelPipeline(proj6);
-    saveDb();
+    saveDb(proj6);
     return sendJson(res, 200, { ok: true, cancelled: cancelled });
   }
 
@@ -601,7 +686,14 @@ var server = http.createServer(function (req, res) {
   return serveStatic(req, res, pathname);
 });
 
-loadDb();
+// Seed the public demo projects once, the first time this app runs with an
+// empty database — or migrate them in from the pre-SQLite data/projects.json
+// if one is sitting there from an older run of this project.
+dbLayer.migrateLegacyJsonIfNeeded();
+if (dbLayer.listProjectsFor(null).length === 0) {
+  buildSeedProjects().forEach(function (p) { dbLayer.saveProject(p); });
+}
+
 server.listen(PORT, function () {
-  console.log('帧语后端运行在 http://localhost:' + PORT + '（数据文件：' + DB_FILE + '）');
+  console.log('帧语后端运行在 http://localhost:' + PORT + '（数据库：video-agent/data/app.db）');
 });
