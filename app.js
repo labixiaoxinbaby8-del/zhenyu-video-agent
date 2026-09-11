@@ -134,6 +134,16 @@
 
   // ---------- filmstrip ----------
 
+  // A shot with a real generated image (shot.imageUrl, from the real AI
+  // pipeline) shows that photo; otherwise falls back to the hue-based
+  // gradient placeholder used throughout the demo pipeline.
+  function shotCssBackground(shot, variant) {
+    if (!shot) return '';
+    if (shot.imageUrl) return 'url(' + shot.imageUrl + ') center/cover no-repeat';
+    if (variant === 'player') return 'linear-gradient(165deg, oklch(80% 0.09 ' + shot.hue + '), oklch(58% 0.09 ' + (shot.hue + 20) + '))';
+    return 'linear-gradient(160deg, oklch(84% 0.07 ' + shot.hue + '), oklch(70% 0.08 ' + (shot.hue + 10) + '))';
+  }
+
   function shotDurationLabel() {
     // Every shot occupies an equal slice of the total runtime in this demo
     // pipeline (totalDuration = shotCount * 5s) — there's no per-shot timing
@@ -182,7 +192,7 @@
       if (shot.active) cls += ' is-active';
       btn.className = cls;
       if (shot.status === 'ready') {
-        btn.style.background = 'linear-gradient(160deg, oklch(84% 0.07 ' + shot.hue + '), oklch(70% 0.08 ' + (shot.hue + 10) + '))';
+        btn.style.background = shotCssBackground(shot, 'filmstrip');
       }
       var inner = '<span class="filmstrip-item__num">' + String(i + 1).padStart(2, '0') + '</span>';
       if (shot.status === 'ready') inner += '<span class="filmstrip-item__duration">' + durationLabel + '</span>';
@@ -256,6 +266,13 @@
     overlay.hidden = false;
   }
 
+  // The decorative sun/wave SVG is drawn for the gradient-placeholder look —
+  // it has no business sitting on top of a real generated photo.
+  function updatePlayerDeco(shot) {
+    var deco = document.querySelector('#player-scene .player-deco');
+    if (deco) deco.style.display = (shot && shot.imageUrl) ? 'none' : '';
+  }
+
   function selectShot(i) {
     state.shots.forEach(function (s, idx) { s.active = idx === i; });
     renderFilmstrip();
@@ -263,9 +280,10 @@
     var scene = document.getElementById('player-scene');
     var msg = scene.querySelector('.player-empty-msg');
     if (shot && shot.status === 'ready') {
-      scene.style.background = 'linear-gradient(165deg, oklch(80% 0.09 ' + shot.hue + '), oklch(58% 0.09 ' + (shot.hue + 20) + '))';
+      scene.style.background = shotCssBackground(shot, 'player');
       if (msg) msg.hidden = true;
     }
+    updatePlayerDeco(shot);
     updateSubtitleUI(shot, i);
     updateTitleOverlay(shot);
     resetPlaybackProgress();
@@ -276,6 +294,7 @@
     scene.style.background = '';
     var msg = scene.querySelector('.player-empty-msg');
     if (msg) msg.hidden = false;
+    updatePlayerDeco(null);
     updateSubtitleUI(null, -1);
     updateTitleOverlay(null);
     updatePlayerEmptyState();
@@ -326,9 +345,9 @@
     $all('.filmstrip-col').forEach(function (col, idx) { col.classList.toggle('is-active', idx === i); });
     $all('.filmstrip-item').forEach(function (btn, idx) { btn.classList.toggle('is-active', idx === i); });
     if (shot.status === 'ready') {
-      document.getElementById('player-scene').style.background =
-        'linear-gradient(165deg, oklch(80% 0.09 ' + shot.hue + '), oklch(58% 0.09 ' + (shot.hue + 20) + '))';
+      document.getElementById('player-scene').style.background = shotCssBackground(shot, 'player');
     }
+    updatePlayerDeco(shot);
     updateSubtitleUI(shot, i);
     updateTitleOverlay(shot);
   }
@@ -562,6 +581,7 @@
       applyLoginUI(null);
       showToast('已退出登录');
       if (state.activeProjectId && !state.isDemo) startNewProject(state.mode);
+      if (backendAvailable !== false) refreshProjectList(); // sidebar must drop back to demo-only projects
     });
   }
 
@@ -703,25 +723,57 @@
     return out + '…';
   }
 
-  function drawExportFrame(ctx, w, h, shot, index, snap) {
-    ctx.clearRect(0, 0, w, h);
-    var hue = shot ? shot.hue : 220;
-    var grad = ctx.createLinearGradient(0, 0, w * 0.3, h);
-    try {
-      grad.addColorStop(0, 'oklch(80% 0.09 ' + hue + ')');
-      grad.addColorStop(1, 'oklch(58% 0.09 ' + (hue + 20) + ')');
-    } catch (e) {
-      grad.addColorStop(0, '#7fb3d9'); grad.addColorStop(1, '#3d6b96'); // fallback if oklch() isn't parseable here
-    }
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+  // Loads every shot's real generated image (if any) up front, aligned by
+  // index with snap.shots, so the per-frame draw loop can stay synchronous.
+  // A shot with no imageUrl (placeholder pipeline, or a failed generation)
+  // resolves to null and just keeps the gradient look.
+  function preloadShotImages(shots) {
+    return Promise.all(shots.map(function (s) {
+      if (!s.imageUrl) return Promise.resolve(null);
+      return new Promise(function (resolve) {
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function () { resolve(img); };
+        img.onerror = function () { resolve(null); };
+        img.src = s.imageUrl;
+      });
+    }));
+  }
 
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = 'oklch(96% 0.05 90)';
-    ctx.beginPath();
-    ctx.arc(w * 0.82, h * 0.16, w * 0.06, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+  // object-fit: cover, drawn manually since canvas has no CSS background-size.
+  function drawCoverImage(ctx, img, w, h) {
+    var imgRatio = img.width / img.height, targetRatio = w / h;
+    var sw, sh, sx, sy;
+    if (imgRatio > targetRatio) { sh = img.height; sw = sh * targetRatio; sx = (img.width - sw) / 2; sy = 0; }
+    else { sw = img.width; sh = sw / targetRatio; sx = 0; sy = (img.height - sh) / 2; }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+  }
+
+  function drawExportFrame(ctx, w, h, shot, index, snap, img) {
+    ctx.clearRect(0, 0, w, h);
+    if (img) {
+      drawCoverImage(ctx, img, w, h);
+      ctx.fillStyle = 'rgba(0,0,0,0.15)'; // keep title/subtitle text legible over a real photo
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      var hue = shot ? shot.hue : 220;
+      var grad = ctx.createLinearGradient(0, 0, w * 0.3, h);
+      try {
+        grad.addColorStop(0, 'oklch(80% 0.09 ' + hue + ')');
+        grad.addColorStop(1, 'oklch(58% 0.09 ' + (hue + 20) + ')');
+      } catch (e) {
+        grad.addColorStop(0, '#7fb3d9'); grad.addColorStop(1, '#3d6b96'); // fallback if oklch() isn't parseable here
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = 'oklch(96% 0.05 90)';
+      ctx.beginPath();
+      ctx.arc(w * 0.82, h * 0.16, w * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
 
     if (snap.mode === 'slideshow' && shot) {
       ctx.textAlign = 'center';
@@ -802,7 +854,7 @@
     if (recordSpan) recordSpan.textContent = text || '录屏导出';
   }
 
-  function startCanvasExport() {
+  async function startCanvasExport() {
     if (state.exporting) { showToast('正在录制中，请稍候…'); return; }
     if (!state.shots.some(function (s) { return s.status === 'ready'; })) { showToast('还没有可导出的分镜'); return; }
     if (typeof MediaRecorder === 'undefined' || !document.createElement('canvas').captureStream) {
@@ -815,13 +867,14 @@
     // it must not keep reading live state.* that the user could change
     // (switch projects, edit captions, toggle subtitles) mid-recording.
     var snap = {
-      shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; }),
+      shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl }; }),
       mode: state.mode,
       projectTitle: state.projectTitle,
       subtitlesOn: state.subtitlesOn,
       totalDuration: state.totalDuration,
       totalShots: state.shots.length
     };
+    snap.images = await preloadShotImages(snap.shots);
 
     var size = exportCanvasSize();
     var canvas = document.createElement('canvas');
@@ -860,7 +913,7 @@
       var elapsed = (performance.now() - startTime) / 1000;
       var clamped = Math.min(snap.totalDuration, elapsed);
       var idx = Math.min(snap.shots.length - 1, Math.floor(clamped / perShot));
-      drawExportFrame(ctx, size.w, size.h, snap.shots[idx], idx, snap);
+      drawExportFrame(ctx, size.w, size.h, snap.shots[idx], idx, snap, snap.images[idx]);
       if (elapsed < snap.totalDuration && state.exporting) requestAnimationFrame(frameLoop);
     }
 
@@ -905,7 +958,7 @@
   function persistShots() {
     if (state.activeProjectId && backendAvailable !== false) {
       var payload = {
-        shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; }),
+        shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError }; }),
         totalDuration: state.totalDuration
       };
       api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: payload }).catch(function () {});
@@ -1047,7 +1100,7 @@
         addScriptLink();
         break;
       case 'shots':
-        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError }; });
         renderFilmstrip();
         if (!state.shots.some(function (s) { return s.active; })) {
           var readyIdx = state.shots.findIndex(function (s) { return s.status === 'ready'; });
@@ -1773,6 +1826,7 @@
         document.getElementById('login-form').reset();
         showToast(isRegister ? '注册成功，欢迎～' : '登录成功');
         updateToolbarDisabledState();
+        if (backendAvailable !== false) refreshProjectList(); // sidebar must now include this user's own projects
       }).catch(function () {
         submitBtn.disabled = false;
         errorEl.textContent = '无法连接后端服务，请确认 node video-agent/server.js 正在运行';

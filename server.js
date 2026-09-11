@@ -15,8 +15,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const dbLayer = require('./db');
+const zhipu = require('./zhipu');
 
 const ROOT = __dirname;
+const DATA_DIR = path.join(ROOT, 'data');
 const PORT = process.env.PORT || 5173;
 // Set COOKIE_SECURE=1 once this is served over HTTPS in production — the
 // session cookie must NOT be marked Secure while testing over plain
@@ -28,7 +30,12 @@ const MIME = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml'
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.wav': 'audio/wav'
 };
 
 const STEP_ORDER = ['script', 'outline', 'storyboard', 'frames', 'voice', 'preview', 'export'];
@@ -109,8 +116,12 @@ function cloneShots(shots) {
   // in place as generation progresses, so embedding the live array reference
   // would silently rewrite every past 'shots' timeline entry to the current
   // (eventually final) state.
-  return shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+  return shots.map(function (s) {
+    return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError };
+  });
 }
+
+function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
 // Splits the prompt into rough clauses to stand in for per-shot narration
 // captions/subtitles — a real script-writing LLM would produce one narration
@@ -160,14 +171,19 @@ function buildContent(prompt) {
 // run — kept out of the project object itself since setTimeout handles
 // aren't JSON-serializable and project objects get persisted via saveDb) ----------
 
-var pipelineTimers = {}; // projectId -> array of Timeout handles
+var pipelineTimers = {}; // projectId -> array of Timeout handles (placeholder/simulated pipeline only)
+// The real AI pipeline runs on async/await, not setTimeout, so it can't be
+// stopped by clearing timers — it cooperatively checks this flag between
+// steps (after each awaited API call) and bails out once it's set.
+var pipelineCancelled = {}; // projectId -> true once cancel has been requested
 
 function cancelPipeline(project) {
+  pipelineCancelled[project.id] = true;
   var timers = pipelineTimers[project.id];
   var hadTimers = !!(timers && timers.length);
   if (timers) { timers.forEach(clearTimeout); delete pipelineTimers[project.id]; }
-  if (project.doneSteps.indexOf('preview') !== -1) return false; // already finished — nothing to cancel
-  if (!hadTimers && project.status !== 'running') return false; // instant (seed) runs have nothing in flight either
+  if (project.doneSteps.indexOf('preview') !== -1) { delete pipelineCancelled[project.id]; return false; } // already finished
+  if (!hadTimers && project.status !== 'running') { delete pipelineCancelled[project.id]; return false; } // nothing in flight
   project.currentStep = null;
   project.status = 'cancelled';
   project.meta = '已取消';
@@ -314,12 +330,180 @@ function runPipelineSteps(project, content, live) {
   });
 }
 
+// ---------- real pipeline (used once ZHIPU_API_KEY is set) ----------
+//
+// Same timeline shape/entry types as the placeholder pipeline above (so none
+// of the client-side rendering needs to change), but every step actually
+// waits on a real network call instead of a fixed setTimeout. Narration audio
+// (GLM-TTS) isn't wired in yet — the account's voice resource package is
+// still empty — so voice/bgm stay picked from the same fixed label list as
+// the placeholder pipeline; only script + per-shot images are real.
+
+function buildScriptPrompt(userPrompt, mode) {
+  var modeDesc = mode === 'html'
+    ? 'HTML 动态网页视频（每个分镜之后会做成一段网页动效画面）'
+    : '图片轮播视频（每个分镜是一张静态画面，多张图片按顺序轮播成片）';
+  return '你是一名短视频编导，请根据下面的创作需求，直接输出一份可直接使用的短视频方案。\n\n' +
+    '创作需求：' + userPrompt + '\n' +
+    '视频类型：' + modeDesc + '\n\n' +
+    '严格只输出一个 JSON 对象，不要输出任何其他文字、不要用 ``` 代码块包裹。JSON 结构如下：\n' +
+    '{\n' +
+    '  "title": "视频标题，不超过16个字",\n' +
+    '  "script": "完整的开场-正文-结尾解说词全文，200到400字",\n' +
+    '  "shots": ["第1个分镜的旁白/字幕文案", "第2个分镜的旁白/字幕文案"]\n' +
+    '}\n\n' +
+    '要求：shots 数组长度在 4 到 8 之间，根据内容量自行决定；每条分镜文案 15 到 40 字，口语化、适合朗读并配合画面展示。';
+}
+
+async function runRealPipeline(project, prompt, mode) {
+  function cancelled() { return !!pipelineCancelled[project.id]; }
+
+  pushEntry(project, { type: 'ai_message', text: '收到！我会调用真实的 AI 模型生成脚本和分镜画面，全程无需你确认，请稍候～', kickoff: true });
+
+  var plan;
+  try {
+    var raw = await zhipu.chatComplete([{ role: 'user', content: buildScriptPrompt(prompt, mode) }]);
+    plan = zhipu.parseJsonReply(raw);
+    if (!Array.isArray(plan.shots) || !plan.shots.length) throw new Error('模型没有返回有效的分镜列表');
+  } catch (e) {
+    pushEntry(project, { type: 'ai_message', text: '脚本生成失败：' + e.message + '。可以换一种说法重新输入提示词试试。' });
+    pushEntry(project, { type: 'status', text: '生成失败', active: false });
+    project.status = 'failed';
+    project.meta = '生成失败';
+    saveDb(project);
+    return;
+  }
+  if (cancelled()) return;
+
+  var shotCount = plan.shots.length;
+  var vb = pickVoiceBgm(prompt);
+  var totalDuration = shotCount * 5;
+
+  project.doneSteps.push('script');
+  project.currentStep = 'outline';
+  if (plan.title) project.title = String(plan.title).trim().slice(0, 40);
+  pushEntry(project, { type: 'process_card', id: 'script', title: '脚本已生成', meta: (plan.script || '').length + ' 字 · 时长约 ' + totalDuration + ' 秒', done: true });
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, { type: 'status', text: '大纲生成中…', active: true });
+
+  await sleep(300);
+  if (cancelled()) return;
+  project.doneSteps.push('outline');
+  project.currentStep = 'storyboard';
+  pushEntry(project, { type: 'process_card', id: 'outline', title: '大纲已生成', meta: '开场 → 核心内容 → 结尾，共 ' + shotCount + ' 个段落', done: true });
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, { type: 'status', text: '拆分分镜中…', active: true });
+
+  await sleep(300);
+  if (cancelled()) return;
+  project.shots = plan.shots.map(function (caption, i) {
+    return { status: 'pending', hue: SHOT_HUES[i % SHOT_HUES.length], caption: String(caption).trim() };
+  });
+  project.doneSteps.push('storyboard');
+  project.currentStep = 'frames';
+  pushEntry(project, { type: 'shots', shots: cloneShots(project.shots) });
+  pushEntry(project, { type: 'process_card', id: 'storyboard', title: '已拆分为 ' + shotCount + ' 个分镜', meta: '每个大纲段落对应 1 个分镜', done: true });
+  pushEntry(project, { type: 'process_card', id: 'frames', title: '分镜画面生成中', meta: '', progress: 0 });
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, { type: 'status', text: '分镜画面生成中 (0/' + shotCount + ')', active: true });
+  pushEntry(project, { type: 'duration', total: totalDuration, done: 0, totalShots: shotCount });
+
+  var assetDir = path.join(DATA_DIR, 'assets', project.id);
+  fs.mkdirSync(assetDir, { recursive: true });
+  var styleSuffix = mode === 'html'
+    ? '，扁平网页风格插画，简洁几何图形，鲜艳配色，不含文字水印'
+    : '，插画风格，鲜艳配色，构图饱满，不含文字水印';
+
+  for (var i = 0; i < shotCount; i++) {
+    if (cancelled()) return;
+    try {
+      var img = await zhipu.generateImage(project.shots[i].caption + styleSuffix);
+      var ext = img.contentType.indexOf('png') !== -1 ? '.png' : '.jpg';
+      var fileName = 'shot-' + i + ext;
+      fs.writeFileSync(path.join(assetDir, fileName), img.buffer);
+      project.shots[i].status = 'ready';
+      project.shots[i].imageUrl = '/data/assets/' + project.id + '/' + fileName;
+    } catch (e) {
+      // Keep the shot usable even if this one image call failed — it just
+      // falls back to the gradient look on the client — rather than blocking
+      // the rest of the video over one bad shot.
+      project.shots[i].status = 'ready';
+      project.shots[i].imageError = e.message;
+    }
+    var doneCount = i + 1;
+    pushEntry(project, { type: 'shots', shots: cloneShots(project.shots) });
+    pushEntry(project, { type: 'process_card_progress', id: 'frames', progress: Math.round((doneCount / shotCount) * 100) });
+    pushEntry(project, { type: 'status', text: '分镜画面生成中 (' + doneCount + '/' + shotCount + ')', active: true });
+    pushEntry(project, { type: 'duration', total: totalDuration, done: doneCount, totalShots: shotCount });
+  }
+  if (cancelled()) return;
+
+  var failedCount = project.shots.filter(function (s) { return s.imageError; }).length;
+  project.doneSteps.push('frames');
+  project.currentStep = 'voice';
+  pushEntry(project, {
+    type: 'process_card_done', id: 'frames', title: '分镜画面已生成',
+    meta: failedCount ? (shotCount - failedCount) + '/' + shotCount + ' 张生成成功，' + failedCount + ' 张生成失败已用占位色块代替' : shotCount + ' 个分镜全部完成'
+  });
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, { type: 'status', text: '配音音色匹配中…', active: true });
+
+  await sleep(300);
+  if (cancelled()) return;
+  project.doneSteps.push('voice');
+  project.voice = vb.voice;
+  project.bgm = vb.bgm;
+  pushEntry(project, { type: 'process_card', id: 'voice', title: '配音音色已选定', meta: '旁白：' + vb.voice + ' · 配乐：' + vb.bgm + '（语音合成服务待开通，当前仅为音色标签）', done: true });
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, { type: 'status', text: '生成字幕中…', active: true });
+
+  await sleep(300);
+  if (cancelled()) return;
+  pushEntry(project, { type: 'process_card', id: 'subtitle', title: '字幕已生成', meta: '已根据分镜文案生成 ' + shotCount + ' 条字幕，可随时开关或编辑', done: true });
+  pushEntry(project, { type: 'status', text: '剪辑合成中…', active: true });
+
+  await sleep(300);
+  if (cancelled()) return;
+  project.currentStep = 'preview';
+  pushEntry(project, { type: 'process_card', id: 'editing', title: '剪辑合成已完成', meta: '画面、文案与字幕已合成为完整分镜序列', done: true });
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, { type: 'status', text: '准备预览…', active: true });
+
+  await sleep(200);
+  if (cancelled()) return;
+  project.doneSteps.push('preview');
+  project.currentStep = 'export';
+  project.status = 'ready';
+  project.meta = '刚刚生成';
+  project.totalDuration = totalDuration;
+  project.script = plan.script || project.shots.map(function (s) { return s.caption; }).join('\n');
+  pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
+  pushEntry(project, {
+    type: 'summary_card',
+    items: ['脚本生成（真实 AI）', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成（真实文生图）', '配音音色选定', '字幕生成', '剪辑合成']
+  });
+  pushEntry(project, {
+    type: 'ai_message',
+    text: '已经用真实 AI 为你生成好脚本和全部 ' + shotCount + ' 个分镜画面啦，配音暂时还是音色标签（语音合成资源包待开通）。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
+  });
+  pushEntry(project, { type: 'script_link', script: project.script });
+  pushEntry(project, { type: 'suggestions', items: ['换一个背景音乐', '重新生成第 1 个分镜', '调整分镜顺序'] });
+  pushEntry(project, { type: 'status', text: '预览确认中，随时可以导出', active: false });
+  delete pipelineCancelled[project.id];
+}
+
 function createProject(mode, prompt, userId) {
-  var content = buildContent(prompt);
+  var normalizedMode = mode === 'html' ? 'html' : 'slideshow';
+  var useRealPipeline = zhipu.hasApiKey();
+  // The placeholder pipeline needs its fake content up front (it drives
+  // shotCount/totalDuration for the very first save); the real pipeline
+  // builds all of that itself from the model's response as it goes, so a
+  // generic starting duration is fine until the storyboard step corrects it.
+  var content = useRealPipeline ? null : buildContent(prompt);
   var project = {
     id: crypto.randomUUID(),
     userId: userId,
-    mode: mode === 'html' ? 'html' : 'slideshow',
+    mode: normalizedMode,
     title: deriveTitle(prompt),
     prompt: prompt,
     meta: '刚刚创建',
@@ -332,13 +516,22 @@ function createProject(mode, prompt, userId) {
     shots: [],
     voice: DEFAULT_VOICE_BGM.voice,
     bgm: DEFAULT_VOICE_BGM.bgm,
-    totalDuration: content.totalDuration,
+    totalDuration: useRealPipeline ? 30 : content.totalDuration,
     exported: false,
     script: '',
     timeline: [{ type: 'user_message', text: prompt, at: new Date().toISOString() }]
   };
   saveDb(project);
-  runPipelineSteps(project, content, true);
+  if (useRealPipeline) {
+    runRealPipeline(project, prompt, normalizedMode).catch(function (e) {
+      pushEntry(project, { type: 'ai_message', text: '生成过程中出现意外错误：' + e.message });
+      pushEntry(project, { type: 'status', text: '生成失败', active: false });
+      project.status = 'failed';
+      saveDb(project);
+    });
+  } else {
+    runPipelineSteps(project, content, true);
+  }
   return project;
 }
 
@@ -580,7 +773,7 @@ var server = http.createServer(function (req, res) {
         // Client-driven edits (add/delete/reorder/re-caption a shot) — the
         // client already applied the change locally and just asks us to
         // persist the resulting list so a reload doesn't lose it.
-        proj2.shots = body.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption }; });
+        proj2.shots = body.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError }; });
       }
       if (typeof body.totalDuration === 'number') proj2.totalDuration = body.totalDuration;
       proj2.updatedAt = new Date().toISOString();
