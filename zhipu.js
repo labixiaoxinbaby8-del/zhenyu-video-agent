@@ -1,14 +1,13 @@
 // 帧语 · 智谱 BigModel 接入层（零外部依赖，用 Node 内置 fetch）
 //
-// 三个能力，一把 Key（环境变量 ZHIPU_API_KEY）：
+// 两个能力，一把 Key（环境变量 ZHIPU_API_KEY）：
 //   - chatComplete()   脚本/分镜文案生成（GLM 对话模型）
 //   - generateImage()  分镜画面文生图（CogView），返回下载好的图片 Buffer
-//   - synthesizeSpeech() 旁白配音（GLM-TTS），返回 wav Buffer
-//     （目前账号语音资源包余额不足，先留好这个函数，等资源包开通后 server.js
-//     直接调用即可，不用再改这个文件）
 //
-// 三个接口共用同一个 Bearer Key、同一个 base URL，坏消息（网络错误/欠费/内容
-// 被拒等）一律包装成 Error 抛出，调用方决定怎么优雅降级。
+// 配音不在这里——GLM-TTS 需要单独的语音资源包，账号里一直没开通，最终改用
+// 阿里云百炼的 Qwen3-TTS（见 aliyun.js），走的是完全不同的账号/接口。
+//
+// 网络错误/欠费/内容被拒等一律包装成 Error 抛出，调用方决定怎么优雅降级。
 'use strict';
 
 const BASE_URL = 'https://open.bigmodel.cn/api/paas/v4';
@@ -96,31 +95,9 @@ async function generateImage(prompt, opts) {
   return { buffer: buf, contentType: sniffImageContentType(buf, imgRes.headers.get('content-type')) };
 }
 
-async function synthesizeSpeech(text, opts) {
-  opts = opts || {};
-  var res = await fetch(BASE_URL + '/audio/speech', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + apiKey(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: opts.model || 'glm-tts',
-      input: text,
-      voice: opts.voice || 'tongtong',
-      response_format: 'wav'
-    })
-  });
-  if (!res.ok) {
-    var errBody = await res.json().catch(function () { return null; });
-    var msg = (errBody && errBody.error && errBody.error.message) || ('HTTP ' + res.status);
-    throw new Error('智谱配音接口出错：' + msg);
-  }
-  var buf = Buffer.from(await res.arrayBuffer());
-  return { buffer: buf, contentType: 'audio/wav' };
-}
-
 module.exports = {
   hasApiKey: hasApiKey,
   chatComplete: chatComplete,
   parseJsonReply: parseJsonReply,
-  generateImage: generateImage,
-  synthesizeSpeech: synthesizeSpeech
+  generateImage: generateImage
 };

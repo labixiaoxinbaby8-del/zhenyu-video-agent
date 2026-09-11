@@ -16,6 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const dbLayer = require('./db');
 const zhipu = require('./zhipu');
+const aliyun = require('./aliyun');
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
@@ -117,7 +118,11 @@ function cloneShots(shots) {
   // would silently rewrite every past 'shots' timeline entry to the current
   // (eventually final) state.
   return shots.map(function (s) {
-    return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError };
+    return {
+      status: s.status, hue: s.hue, caption: s.caption,
+      imageUrl: s.imageUrl, imageError: s.imageError,
+      audioUrl: s.audioUrl, audioError: s.audioError
+    };
   });
 }
 
@@ -446,14 +451,43 @@ async function runRealPipeline(project, prompt, mode) {
     meta: failedCount ? (shotCount - failedCount) + '/' + shotCount + ' 张生成成功，' + failedCount + ' 张生成失败已用占位色块代替' : shotCount + ' 个分镜全部完成'
   });
   pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
-  pushEntry(project, { type: 'status', text: '配音音色匹配中…', active: true });
-
-  await sleep(300);
-  if (cancelled()) return;
-  project.doneSteps.push('voice');
   project.voice = vb.voice;
   project.bgm = vb.bgm;
-  pushEntry(project, { type: 'process_card', id: 'voice', title: '配音音色已选定', meta: '旁白：' + vb.voice + ' · 配乐：' + vb.bgm + '（语音合成服务待开通，当前仅为音色标签）', done: true });
+
+  if (aliyun.hasApiKey()) {
+    pushEntry(project, { type: 'status', text: '配音生成中 (0/' + shotCount + ')', active: true });
+    var voiceId = aliyun.voiceIdFor(vb.voice);
+    var voiceFailCount = 0;
+    for (var vi = 0; vi < shotCount; vi++) {
+      if (cancelled()) return;
+      try {
+        var audio = await aliyun.synthesizeSpeech(project.shots[vi].caption, { voice: voiceId });
+        var audioFileName = 'shot-' + vi + '.wav';
+        fs.writeFileSync(path.join(assetDir, audioFileName), audio.buffer);
+        project.shots[vi].audioUrl = '/data/assets/' + project.id + '/' + audioFileName;
+      } catch (e) {
+        voiceFailCount++;
+        project.shots[vi].audioError = e.message;
+      }
+      pushEntry(project, { type: 'shots', shots: cloneShots(project.shots) });
+      pushEntry(project, { type: 'status', text: '配音生成中 (' + (vi + 1) + '/' + shotCount + ')', active: true });
+    }
+    if (cancelled()) return;
+    project.doneSteps.push('voice');
+    pushEntry(project, {
+      type: 'process_card', id: 'voice', title: '分镜配音已生成',
+      meta: voiceFailCount
+        ? (shotCount - voiceFailCount) + '/' + shotCount + ' 条配音生成成功，' + voiceFailCount + ' 条失败 · 音色：' + vb.voice + ' · 配乐：' + vb.bgm
+        : '已生成 ' + shotCount + ' 条真实配音 · 音色：' + vb.voice + ' · 配乐：' + vb.bgm,
+      done: true
+    });
+  } else {
+    pushEntry(project, { type: 'status', text: '配音音色匹配中…', active: true });
+    await sleep(300);
+    if (cancelled()) return;
+    project.doneSteps.push('voice');
+    pushEntry(project, { type: 'process_card', id: 'voice', title: '配音音色已选定', meta: '旁白：' + vb.voice + ' · 配乐：' + vb.bgm + '（语音合成服务未配置，当前仅为音色标签）', done: true });
+  }
   pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
   pushEntry(project, { type: 'status', text: '生成字幕中…', active: true });
 
@@ -477,14 +511,17 @@ async function runRealPipeline(project, prompt, mode) {
   project.meta = '刚刚生成';
   project.totalDuration = totalDuration;
   project.script = plan.script || project.shots.map(function (s) { return s.caption; }).join('\n');
+  var hasRealVoice = aliyun.hasApiKey();
   pushEntry(project, { type: 'stepper', currentStep: project.currentStep, doneSteps: project.doneSteps.slice() });
   pushEntry(project, {
     type: 'summary_card',
-    items: ['脚本生成（真实 AI）', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成（真实文生图）', '配音音色选定', '字幕生成', '剪辑合成']
+    items: ['脚本生成（真实 AI）', '分镜拆分（' + shotCount + ' 个分镜）', '画面生成（真实文生图）', hasRealVoice ? '配音生成（真实语音合成）' : '配音音色选定', '字幕生成', '剪辑合成']
   });
   pushEntry(project, {
     type: 'ai_message',
-    text: '已经用真实 AI 为你生成好脚本和全部 ' + shotCount + ' 个分镜画面啦，配音暂时还是音色标签（语音合成资源包待开通）。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
+    text: hasRealVoice
+      ? '已经用真实 AI 为你生成好脚本、全部 ' + shotCount + ' 个分镜画面和配音啦。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
+      : '已经用真实 AI 为你生成好脚本和全部 ' + shotCount + ' 个分镜画面啦，配音暂时还是音色标签（语音合成服务未配置）。可以点击中间播放预览；如果哪个分镜不满意，直接告诉我要怎么改～'
   });
   pushEntry(project, { type: 'script_link', script: project.script });
   pushEntry(project, { type: 'suggestions', items: ['换一个背景音乐', '重新生成第 1 个分镜', '调整分镜顺序'] });
@@ -773,7 +810,13 @@ var server = http.createServer(function (req, res) {
         // Client-driven edits (add/delete/reorder/re-caption a shot) — the
         // client already applied the change locally and just asks us to
         // persist the resulting list so a reload doesn't lose it.
-        proj2.shots = body.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError }; });
+        proj2.shots = body.shots.map(function (s) {
+          return {
+            status: s.status, hue: s.hue, caption: s.caption,
+            imageUrl: s.imageUrl, imageError: s.imageError,
+            audioUrl: s.audioUrl, audioError: s.audioError
+          };
+        });
       }
       if (typeof body.totalDuration === 'number') proj2.totalDuration = body.totalDuration;
       proj2.updatedAt = new Date().toISOString();

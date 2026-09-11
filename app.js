@@ -321,6 +321,8 @@
 
   // ---------- playback (purely client-side; no server concept of "now playing") ----------
 
+  function previewAudioEl() { return document.getElementById('preview-audio'); }
+
   function resetPlaybackProgress() {
     stopPlaybackInterval();
     state.isPlaying = false;
@@ -332,6 +334,9 @@
     if (mini) mini.outerHTML = playSvgSmall();
     document.getElementById('progress-fill').style.width = '0%';
     document.getElementById('time-label').textContent = '00:00 / ' + formatTime(state.totalDuration);
+    var audio = previewAudioEl();
+    audio.pause();
+    audio.removeAttribute('src');
   }
 
   // Lightweight visual-only shot switch used while playback is running —
@@ -350,6 +355,20 @@
     updatePlayerDeco(shot);
     updateSubtitleUI(shot, i);
     updateTitleOverlay(shot);
+
+    // Real per-shot narration (aliyun.js/TTS) — swap the <audio> source as
+    // playback advances into a new shot. Shots without audio (placeholder
+    // pipeline, or a failed synthesis) just play silently.
+    var audio = previewAudioEl();
+    audio.muted = state.muted;
+    if (shot.audioUrl) {
+      var absoluteUrl = new URL(shot.audioUrl, location.href).href;
+      if (audio.src !== absoluteUrl) audio.src = shot.audioUrl;
+      if (state.isPlaying) audio.play().catch(function () { /* autoplay can be blocked before any user gesture; harmless */ });
+    } else {
+      audio.pause();
+      audio.removeAttribute('src');
+    }
   }
 
   function updatePlaybackUI() {
@@ -395,6 +414,7 @@
           bigBtn.style.pointerEvents = 'auto';
           var miniEl = document.getElementById('mini-play-icon');
           if (miniEl) miniEl.outerHTML = playSvgSmall();
+          previewAudioEl().pause();
         }
         updatePlaybackUI();
       }, 100);
@@ -403,6 +423,7 @@
       bigBtn.style.pointerEvents = 'auto';
       if (mini) mini.outerHTML = playSvgSmall();
       stopPlaybackInterval();
+      previewAudioEl().pause();
     }
   }
 
@@ -437,7 +458,8 @@
     state.muted = !state.muted;
     var el = document.getElementById('mute-icon-btn');
     if (el) el.outerHTML = state.muted ? mutedSpeakerSvg() : speakerSvg();
-    showToast(state.muted ? '已静音（原型演示，暂无实际音频）' : '已取消静音');
+    previewAudioEl().muted = state.muted;
+    showToast(state.muted ? '已静音' : '已取消静音');
   }
 
   // ---------- chat log ----------
@@ -854,6 +876,22 @@
     if (recordSpan) recordSpan.textContent = text || '录屏导出';
   }
 
+  // Decodes each shot's real narration audio (if any) up front so playback
+  // can be scheduled precisely at recorder start rather than fetched/decoded
+  // mid-recording. A shot with no audioUrl (placeholder pipeline, TTS not
+  // configured, or a failed synthesis for that shot) decodes to null.
+  function preloadShotAudio(shots, audioCtx) {
+    return Promise.all(shots.map(function (s) {
+      if (!s.audioUrl || !audioCtx) return Promise.resolve(null);
+      return fetch(s.audioUrl)
+        .then(function (r) { return r.arrayBuffer(); })
+        .then(function (buf) { return audioCtx.decodeAudioData(buf); })
+        .catch(function () { return null; });
+    }));
+  }
+
+  var EXPORT_FALLBACK_SHOT_SECONDS = 4; // used only for a shot with no real narration audio to time itself by
+
   async function startCanvasExport() {
     if (state.exporting) { showToast('正在录制中，请稍候…'); return; }
     if (!state.shots.some(function (s) { return s.status === 'ready'; })) { showToast('还没有可导出的分镜'); return; }
@@ -867,7 +905,7 @@
     // it must not keep reading live state.* that the user could change
     // (switch projects, edit captions, toggle subtitles) mid-recording.
     var snap = {
-      shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl }; }),
+      shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, audioUrl: s.audioUrl }; }),
       mode: state.mode,
       projectTitle: state.projectTitle,
       subtitlesOn: state.subtitlesOn,
@@ -876,19 +914,51 @@
     };
     snap.images = await preloadShotImages(snap.shots);
 
+    var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    var audioCtx = AudioContextClass ? new AudioContextClass() : null;
+    var audioBuffers = await preloadShotAudio(snap.shots, audioCtx);
+    var hasRealAudio = audioBuffers.some(function (b) { return !!b; });
+
+    // With real narration, each shot plays for exactly as long as its own
+    // audio does (so voice never gets cut off or drags dead air) instead of
+    // the placeholder pipeline's fixed equal-length slices.
+    var shotDurations, shotStarts;
+    if (hasRealAudio) {
+      shotDurations = snap.shots.map(function (s, i) { return audioBuffers[i] ? audioBuffers[i].duration : EXPORT_FALLBACK_SHOT_SECONDS; });
+      shotStarts = [];
+      var acc = 0;
+      shotDurations.forEach(function (d) { shotStarts.push(acc); acc += d; });
+      snap.totalDuration = acc;
+    } else {
+      var perShot = snap.totalDuration / snap.shots.length;
+      shotDurations = snap.shots.map(function () { return perShot; });
+      shotStarts = snap.shots.map(function (s, i) { return perShot * i; });
+    }
+    function shotIndexAtTime(t) {
+      for (var i = shotStarts.length - 1; i >= 0; i--) if (t >= shotStarts[i]) return i;
+      return 0;
+    }
+
     var size = exportCanvasSize();
     var canvas = document.createElement('canvas');
     canvas.width = size.w;
     canvas.height = size.h;
     var ctx = canvas.getContext('2d');
-    var perShot = snap.totalDuration / snap.shots.length;
     var totalMs = Math.max(1000, snap.totalDuration * 1000);
 
-    var mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].filter(function (t) {
+    var mimeCandidates = hasRealAudio
+      ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    var mimeType = mimeCandidates.filter(function (t) {
       return window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported(t);
     })[0] || '';
 
-    var stream = canvas.captureStream(30);
+    var videoStream = canvas.captureStream(30);
+    var audioDest = (audioCtx && hasRealAudio) ? audioCtx.createMediaStreamDestination() : null;
+    var tracks = videoStream.getVideoTracks().slice();
+    if (audioDest) tracks = tracks.concat(audioDest.stream.getAudioTracks());
+    var stream = new MediaStream(tracks);
+
     var recorder;
     try {
       recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType } : undefined);
@@ -912,7 +982,7 @@
     function frameLoop() {
       var elapsed = (performance.now() - startTime) / 1000;
       var clamped = Math.min(snap.totalDuration, elapsed);
-      var idx = Math.min(snap.shots.length - 1, Math.floor(clamped / perShot));
+      var idx = shotIndexAtTime(clamped);
       drawExportFrame(ctx, size.w, size.h, snap.shots[idx], idx, snap, snap.images[idx]);
       if (elapsed < snap.totalDuration && state.exporting) requestAnimationFrame(frameLoop);
     }
@@ -922,11 +992,12 @@
       state.exporting = false;
       setExportBusyLabel(null);
       updateToolbarDisabledState();
+      if (audioCtx) audioCtx.close().catch(function () {});
       var blob = new Blob(chunks, { type: mimeType || 'video/webm' });
       var filename = (snap.projectTitle || '帧语导出') + '.webm';
       saveExportedFile(filename, blob).then(function (saved) {
         showToast(saved
-          ? '导出完成，已保存（' + formatTime(snap.totalDuration) + '，暂无音频的演示版）'
+          ? '导出完成，已保存（' + formatTime(snap.totalDuration) + (hasRealAudio ? '，含真实配音）' : '，暂无音频的演示版）')
           : '已取消保存');
       });
     };
@@ -935,10 +1006,20 @@
       state.exporting = false;
       setExportBusyLabel(null);
       updateToolbarDisabledState();
+      if (audioCtx) audioCtx.close().catch(function () {});
       showToast('录制出错：' + (e.error ? e.error.message : '未知错误'));
     };
 
     recorder.start();
+    if (audioDest) {
+      audioBuffers.forEach(function (buf, i) {
+        if (!buf) return;
+        var src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioDest);
+        src.start(audioCtx.currentTime + shotStarts[i]);
+      });
+    }
     frameLoop();
     setTimeout(function () {
       if (recorder.state !== 'inactive') recorder.stop();
@@ -958,7 +1039,7 @@
   function persistShots() {
     if (state.activeProjectId && backendAvailable !== false) {
       var payload = {
-        shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError }; }),
+        shots: state.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError, audioUrl: s.audioUrl, audioError: s.audioError }; }),
         totalDuration: state.totalDuration
       };
       api('/api/projects/' + state.activeProjectId, { method: 'PATCH', body: payload }).catch(function () {});
@@ -1100,7 +1181,7 @@
         addScriptLink();
         break;
       case 'shots':
-        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError }; });
+        state.shots = entry.shots.map(function (s) { return { status: s.status, hue: s.hue, caption: s.caption, imageUrl: s.imageUrl, imageError: s.imageError, audioUrl: s.audioUrl, audioError: s.audioError }; });
         renderFilmstrip();
         if (!state.shots.some(function (s) { return s.active; })) {
           var readyIdx = state.shots.findIndex(function (s) { return s.status === 'ready'; });
